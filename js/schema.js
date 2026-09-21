@@ -109,7 +109,12 @@
      passes disagreeing is the cheapest bug detector either of us has. */
   const TASK = [
     { key: "id",          header: "ID",                                 type: "text",   required: true,  confirmed: true },                                   // A
-    { key: "phase",       header: "Phase",                              type: "text",   required: true,  confirmed: true },                                   // B
+    /* NOT required: js/import.js treats a phase as optional everywhere (an
+       activity without one simply sits under no band), but marking it required
+       here made readSheet abandon the whole sheet, so a Task List with no
+       Phase column imported nothing and reported "no data rows" on a sheet
+       full of rows. */
+    { key: "phase",       header: "Phase",                              type: "text",   confirmed: true },                                                    // B
     { key: "name",        header: "Task",                               type: "text",   required: true,  confirmed: true, aliases: ["Task Name", "Activity"] }, // C
     { key: "team",        header: "Assigned Team",                      type: "text",   confirmed: true, aliases: ["Team", "Owner"] },                        // D
     { key: "ttType",      header: "Team Topologies Type",               type: "enum",   enum: "ttType", confirmed: true },                                     // E

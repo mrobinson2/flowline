@@ -40,7 +40,37 @@
   const slug = s => String(s == null ? "" : s).toLowerCase()
     .replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "x";
   const txt = v => String(v === undefined || v === null ? "" : v).trim();
-  const num = v => { const n = Number(String(v === undefined || v === null ? "" : v).replace(/,/g, "")); return isFinite(n) ? n : null; };
+  /* A BLANK CELL IS NOT ZERO. Number("") is 0 and isFinite(0) is true, so this
+     used to answer 0 for an empty cell and null only for genuine text. Three
+     fallbacks downstream test for null and so never fired: a blank Optimized
+     column became an optimized time of zero rather than falling back to the
+     current time, a blank %C&A became a recorded "0% complete and accurate",
+     and a workbook with no CPM columns at all got a full set of zeroed source
+     figures that reconcile() then reported as a total disagreement. */
+  const num = v => {
+    const s = String(v === undefined || v === null ? "" : v).replace(/,/g, "").trim();
+    if (s === "") return null;
+    const n = Number(s);
+    return isFinite(n) ? n : null;
+  };
+
+  /* slug() truncates at 48 characters, so two long phrases that differ only
+     after that point collapse onto one id. That produced duplicate scenario
+     attribute ids and a model the app's own validator then rejected. A
+     namespaced slugger remembers what it has handed out: the same text always
+     gets the same id, and different text never shares one. */
+  function slugger() {
+    const byText = new Map(), used = new Set();
+    return raw => {
+      const key = String(raw === undefined || raw === null ? "" : raw).trim();
+      if (byText.has(key)) return byText.get(key);
+      const base = slug(key);
+      let id = base, n = 2;
+      while (used.has(id)) id = base.slice(0, 44) + "-" + (n++);
+      used.add(id); byText.set(key, id);
+      return id;
+    };
+  }
 
   /* --------------------------------------------------------------- taxonomy
      Built from the workbook's own vocabulary, not ours. The bar glyph for a
@@ -157,10 +187,12 @@
     const rows = readSheet(sheet, S.TOGGLES, report, "Toggles");
     if (!rows.length) return null;
     const out = [];
+    const seenToggles = new Set();          // a scan of `out` per row is quadratic on a large sheet
     rows.forEach(r => {
       const id = txt(r.id);
       if (!id) { report.warnings.push("Toggles row " + r.__row + " has no Toggle ID and was skipped."); return; }
-      if (out.some(t => t.id === id)) { report.warnings.push("Toggles row " + r.__row + ": duplicate toggle '" + id + "'."); return; }
+      if (seenToggles.has(id)) { report.warnings.push("Toggles row " + r.__row + ": duplicate toggle '" + id + "'."); return; }
+      seenToggles.add(id);
       const declared = txt(r.type).toLowerCase();
       const optionList = txt(r.options).split(/\s*;\s*/).map(s => s.trim()).filter(Boolean);
       const type = declared === "choice" || declared === "enum" || (!declared && optionList.length) ? "enum"
@@ -211,7 +243,7 @@
     sheet.matrix.slice(1).forEach((row, n) => {
       const id = txt(row[iId]);
       if (!id) return;
-      const set = {};
+      const set = Object.create(null);
       cols.forEach(c => {
         const raw = txt(row[c.i]);
         if (raw === "") return;                              // silent: modifier survives
@@ -264,7 +296,11 @@
       const rule = cond.values
         ? (cond.values.length === 1 ? { [t.id]: cond.values[0] } : { [t.id]: { in: cond.values } })
         : { [t.id]: true };
-      cols.push({ i, header: h, toggle: t, rule });
+      /* `values` is what fullScopeSet() scores choice toggles on. It was never
+         set here, so both of that function's enum branches were dead code and
+         the "Full scope" preset silently omitted every step reached only
+         through a choice toggle. */
+      cols.push({ i, header: h, toggle: t, rule, values: cond.values || null });
     });
     if (!cols.length) { report.warnings.push("Scenario Matrix has no usable toggle columns."); return null; }
 
@@ -284,6 +320,13 @@
         entry.require.push(c);
         if (cell.factor && cell.factor !== 1) entry.factors.push({ col: c, factor: cell.factor });
       });
+      /* No Baseline and nothing requiring it means entryToRule() returns false
+         and the task is invisible under every combination of toggles. That is
+         almost always a half-filled row, and it used to happen in silence -
+         the one thing this importer promises never to do. */
+      if (!entry.baseline && !entry.require.length) {
+        report.warnings.push("Scenario Matrix row " + (n + 2) + " (" + id + "): no Baseline and no toggle requires it, so this task can never appear. Set Baseline to Yes, or put an R in one of the toggle columns.");
+      }
       out.set(id, entry);
     });
     return out;
@@ -300,7 +343,7 @@
      by it. Toggles that merely stretch durations, or that only remove steps,
      stay off, so full scope is the full task list at unmodified length. */
   function fullScopeSet(toggles, matrix) {
-    const set = {};
+    const set = Object.create(null);
     if (!toggles || !matrix) return set;
     /* Where a step can be reached more than one way, take a route that does
        not also stretch it. Otherwise "show me everything" quietly inflates
@@ -316,7 +359,7 @@
     orphans.forEach(e => { if (!e.require.some(c => needed.has(c))) needed.add(e.require[0]); });
     /* pick the choice value that excludes the fewest steps */
     toggles.filter(t => t.type === "enum" && t.options).forEach(t => {
-      const score = {};
+      const score = Object.create(null);
       t.options.forEach(o => { score[o.value] = 0; });
       matrix.forEach(entry => {
         entry.exclude.forEach(c => {
@@ -380,10 +423,18 @@
     };
 
     /* ---- phases, in the order they first appear (they are numbered already) */
-    const phaseOrder = [], phaseById = {};
+    /* Null-prototype throughout this function: every one of these maps is
+       keyed by a slug of text out of the workbook, and slug() leaves
+       "constructor" alone. Against a plain object the get-or-create guards
+       below saw Object.prototype.constructor, decided the phase or team was
+       already registered, and dropped it with no warning. */
+    const phaseOrder = [], phaseById = Object.create(null);
+    /* One slugger per namespace, shared with the per-activity lookups below so
+       a phase and the activity pointing at it always agree on the id. */
+    const phaseSlug = slugger(), teamSlug = slugger(), condSlug = slugger();
     taskRows.forEach(r => {
       const label = txt(r.phase); if (!label) return;
-      const id = slug(label);
+      const id = phaseSlug(label);
       if (!phaseById[id]) {
         // "3. Placement & Pattern Selection" -> short "Placement"
         const stripped = label.replace(/^\s*\d+[.)]\s*/, "");
@@ -394,10 +445,10 @@
     phaseOrder.sort((a, b) => a.n - b.n);
 
     /* ---- teams; organization boundary = Team Topologies Type */
-    const teams = {};
+    const teams = Object.create(null);
     taskRows.forEach(r => {
       const label = txt(r.team); if (!label) return;
-      const id = slug(label);
+      const id = teamSlug(label);
       const tt = txt(r.ttType);
       const ttDef = tt ? S.matchValue("ttType", tt) : null;
       if (tt && !ttDef) noteUnmapped("Team Topologies Type", tt, txt(r.id));
@@ -420,13 +471,13 @@
     taskRows.forEach(r => {
       const phrase = txt(r.appliesWhen);
       if (!phrase || ALWAYS.indexOf(phrase.toLowerCase()) >= 0) return;
-      if (!conditions.has(phrase)) conditions.set(phrase, { id: slug(phrase), label: phrase, count: 0 });
+      if (!conditions.has(phrase)) conditions.set(phrase, { id: condSlug(phrase), label: phrase, count: 0 });
       conditions.get(phrase).count++;
     });
     const attributes = [...conditions.values()]
       .sort((a, b) => b.count - a.count)
       .map(c => ({ id: c.id, label: c.label, type: "boolean", default: true, help: c.count + " step" + (c.count === 1 ? "" : "s") }));
-    const namedRules = {};
+    const namedRules = Object.create(null);
     conditions.forEach(c => { namedRules[c.id] = { [c.id]: true }; });
 
     /* ---- activities */
@@ -473,8 +524,8 @@
       const a = {
         id,
         name: txt(r.name) || id,
-        phase: txt(r.phase) ? slug(r.phase) : undefined,
-        owner: txt(r.team) ? slug(r.team) : undefined,
+        phase: txt(r.phase) ? phaseSlug(txt(r.phase)) : undefined,
+        owner: txt(r.team) ? teamSlug(txt(r.team)) : undefined,
         category,
         duration: { current, optimal },
         /* the lead/cycle split kept intact: solid = cycle, hatched = lead */
@@ -544,6 +595,7 @@
     let edgeCount = 0, edgeAdded = 0;
     let bindingEdges = 0;
     const binding = new Set();
+    const predSets = new Map();
     if (found.edges) {
       const edgeRows = readSheet(found.edges, S.EDGES, report, "Edges");
       edgeRows.forEach(e => {
@@ -553,7 +605,10 @@
         if (!ids.has(from)) { report.warnings.push("Edges row " + e.__row + ": predecessor '" + from + "' is not a task ID."); return; }
         if (!ids.has(to)) { report.warnings.push("Edges row " + e.__row + ": successor '" + to + "' is not a task ID."); return; }
         const t = byId.get(to);
-        if (t.predecessors.indexOf(from) < 0) { t.predecessors.push(from); edgeAdded++; }
+        // a Set per task: indexOf here is O(predecessors) on every edge row
+        let have = predSets.get(to);
+        if (!have) { have = new Set(t.predecessors); predSets.set(to, have); }
+        if (!have.has(from)) { have.add(from); t.predecessors.push(from); edgeAdded++; }
         /* Zero-Slack Link = BINDING: the links that actually drive the end
            date. Worth carrying through so the chart can draw them heavier than
            the rest instead of showing 180 equal-weight arrows. */
@@ -575,7 +630,7 @@
     if (found.assumptions) {
       const rows = readSheet(found.assumptions, S.ASSUMPTIONS, report, "Assumptions");
       if (rows.length) {
-        assumptions = {};
+        assumptions = Object.create(null);
         rows.forEach(r => {
           const st = S.matchValue("stepType", txt(r.stepType));
           const key = st ? st.id : slug(r.stepType);
@@ -654,8 +709,8 @@
         attributes: attributes.length ? attributes : [{ id: "all", label: "All steps", type: "boolean", default: true }],
         rules: namedRules,
         presets: [
-          { id: "everything", label: "Every step (full map)", set: attributes.reduce((o, a) => (o[a.id] = true, o), {}) },
-          { id: "baseline", label: "Baseline workload only", set: attributes.reduce((o, a) => (o[a.id] = false, o), {}) }
+          { id: "everything", label: "Every step (full map)", set: attributes.reduce((o, a) => (o[a.id] = true, o), Object.create(null)) },
+          { id: "baseline", label: "Baseline workload only", set: attributes.reduce((o, a) => (o[a.id] = false, o), Object.create(null)) }
         ]
       };
       report.notes.push("No Toggles tab, so the scenario switches were built from the distinct Applies When phrases. Add Toggles, Profiles and Scenario Matrix tabs to tailor properly.");
@@ -736,7 +791,8 @@
       }
     });
     const ends = model.nodes.map(n => (n.act && n.act.source ? n.act.source.ef : null)).filter(v => v !== null && v !== undefined);
-    out.endTheirs = ends.length ? Math.max(...ends) : null;
+    // reduce, not spread: Math.max(...ends) throws RangeError past ~125k arguments
+    out.endTheirs = ends.length ? ends.reduce((m, v) => (v > m ? v : m), -Infinity) : null;
     out.endOurs = Math.round((model.metrics.currentElapsed / perDay) * 100) / 100;
     out.mismatchCount = out.checked - out.agree;
 
