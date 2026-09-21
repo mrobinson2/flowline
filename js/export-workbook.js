@@ -299,9 +299,13 @@
           name: "Profiles", headers: VSM.schema.PROFILE_FIXED.concat(ids), widths: [20, 34, 52].concat(ids.map(() => 15)),
           rows: cfg.presets.map(p => {
             const set = p.set || p.values || {};
-            const row = { "Profile ID": p.id, "Label": p.label, "Description": p.description || "" };
+            /* Null-prototype row, own-property test on `set`: toggle ids come
+               from the workbook, and `in` walks the prototype chain, so a
+               profile silent about a toggle named "constructor" was exported
+               as if it declared one (and "__proto__" wrote nothing at all). */
+            const row = Object.assign(Object.create(null), { "Profile ID": p.id, "Label": p.label, "Description": p.description || "" });
             ids.forEach(id => {
-              if (!(id in set)) { row[id] = ""; return; }     // silence is the point
+              if (!Object.prototype.hasOwnProperty.call(set, id)) { row[id] = ""; return; }     // silence is the point
               const v = set[id];
               row[id] = Array.isArray(v) ? v.join(";") : v === true ? "Yes" : v === false ? "No" : txt(v);
             });

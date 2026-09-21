@@ -57,21 +57,29 @@ VSM.rules = (function () {
      by any number of activities:  "when": "securityReview"
      `named` is supplied by the caller; validate.js has already rejected unknown names
      and reference loops, and the depth guard is a belt-and-braces stop. */
+  /* The depth counter covers STRUCTURAL nesting as well as named-rule
+     indirection. It used to count only the latter, so an inline rule nested
+     thousands of levels deep recursed once per level. validate.js refuses such
+     a rule before it reaches here, but this function is the one an embedding
+     host can reach directly, and a stack overflow is not a good answer. */
+  const MAX_DEPTH = 200;
   function evaluate(cond, scenario, named, depth) {
+    const d = depth || 0;
+    if (d > MAX_DEPTH) return false;
     if (cond === undefined || cond === null || cond === true) return true;
     if (cond === false) return false;
     if (typeof cond === "string") {
       const table = named || {};
-      if (!Object.prototype.hasOwnProperty.call(table, cond) || (depth || 0) > 20) return false;
-      return evaluate(table[cond], scenario, table, (depth || 0) + 1);
+      if (!Object.prototype.hasOwnProperty.call(table, cond) || d > 20) return false;
+      return evaluate(table[cond], scenario, table, d + 1);
     }
-    if (Array.isArray(cond)) return cond.every(c => evaluate(c, scenario, named, depth));
+    if (Array.isArray(cond)) return cond.every(c => evaluate(c, scenario, named, d + 1));
     if (typeof cond !== "object") return false;
     return Object.keys(cond).every(key => {
       const v = cond[key];
-      if (key === "all") return (v || []).every(c => evaluate(c, scenario, named, depth));
-      if (key === "any") return (v || []).some(c => evaluate(c, scenario, named, depth));
-      if (key === "not") return !evaluate(v, scenario, named, depth);
+      if (key === "all") return (v || []).every(c => evaluate(c, scenario, named, d + 1));
+      if (key === "any") return (v || []).some(c => evaluate(c, scenario, named, d + 1));
+      if (key === "not") return !evaluate(v, scenario, named, d + 1);
       return matchAttr(scenario[key], v);
     });
   }
@@ -84,19 +92,21 @@ VSM.rules = (function () {
       const o = d && d.options ? d.options.find(x => x.value === v) : null;
       return o ? o.label : String(v);
     };
+    const d = depth || 0;
+    if (d > MAX_DEPTH) return "…";
     if (cond === undefined || cond === null || cond === true) return "Always included";
     if (cond === false) return "Never included";
     if (typeof cond === "string") {
       const table = named || {};
-      if (!Object.prototype.hasOwnProperty.call(table, cond) || (depth || 0) > 20) return "unknown rule '" + cond + "'";
-      return cond + " (" + describe(table[cond], attrDefs, table, (depth || 0) + 1) + ")";
+      if (!Object.prototype.hasOwnProperty.call(table, cond) || d > 20) return "unknown rule '" + cond + "'";
+      return cond + " (" + describe(table[cond], attrDefs, table, d + 1) + ")";
     }
-    if (Array.isArray(cond)) return cond.map(c => describe(c, attrDefs, named, depth)).join(" AND ");
+    if (Array.isArray(cond)) return cond.map(c => describe(c, attrDefs, named, d + 1)).join(" AND ");
     return Object.keys(cond).map(key => {
       const v = cond[key];
-      if (key === "all") return "(" + v.map(c => describe(c, attrDefs, named, depth)).join(" AND ") + ")";
-      if (key === "any") return "(" + v.map(c => describe(c, attrDefs, named, depth)).join(" OR ") + ")";
-      if (key === "not") return "NOT (" + describe(v, attrDefs, named, depth) + ")";
+      if (key === "all") return "(" + (v || []).map(c => describe(c, attrDefs, named, d + 1)).join(" AND ") + ")";
+      if (key === "any") return "(" + (v || []).map(c => describe(c, attrDefs, named, d + 1)).join(" OR ") + ")";
+      if (key === "not") return "NOT (" + describe(v, attrDefs, named, d + 1) + ")";
       if (typeof v === "boolean") return label(key) + (v ? " = on" : " = off");
       if (Array.isArray(v)) return label(key) + " in [" + v.map(x => optLabel(key, x)).join(", ") + "]";
       if (v !== null && typeof v === "object") {

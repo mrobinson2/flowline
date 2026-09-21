@@ -37,9 +37,16 @@ VSM.layout = (function () {
     };
   }
 
+  /* Row heights by density name. Looked up with hasOwnProperty because the
+     name arrives from persisted UI state or an embed host: "constructor" and
+     "toString" are inherited from Object.prototype, are truthy, and sailed
+     past the "|| 28" fallback, making every derived size NaN. */
+  const DENSITY = { comfortable: 34, normal: 28, compact: 20 };
+  const densityOf = name => (Object.prototype.hasOwnProperty.call(DENSITY, name) ? DENSITY[name] : DENSITY.normal);
+
   /* Interactive mode: rows have a fixed height chosen by the density setting; the SVG grows. */
   function interactive(rowCount, opts) {
-    const density = { comfortable: 34, normal: 28, compact: 20 }[opts.density || "normal"] || 28;
+    const density = densityOf(opts.density || "normal");
     const d = derive(density);
     const axisH = 40;
     const padTop = 8, padBottom = 12, padL = 20, padR = 22;

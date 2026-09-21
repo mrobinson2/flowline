@@ -20,10 +20,55 @@ VSM.validate = (function () {
   const ACT_ID = /^[^\s;,|]+$/;
   const OPS = ["eq", "ne", "in", "notIn", "includes", "includesAny", "includesAll", "gt", "gte", "lt", "lte"];
 
+  /* One walk over the raw data, before anything reads a field, checking two
+     things nothing else can.
+
+     1. A "__proto__" key. JSON.parse turns it into a real own property and
+        nothing here wants one. It is also ambiguous in a data FILE: read back
+        through js/files.js it is an own property, but the browser loads
+        data/*.data.js as a script, where "__proto__" in an object literal sets
+        the prototype instead. Refuse it rather than carry two meanings.
+
+     2. Nesting deeper than anything real. JSON.parse accepts structures that
+        JSON.stringify and VSM.deepClone then overflow the stack on, so data
+        that validated cleanly could still throw from the save path or from an
+        inline edit. The rule depth cap further down only covers rules; this
+        covers every field. */
+  const MAX_DEPTH = 200;
+  function structureFault(root) {
+    const stack = [{ v: root, path: "", depth: 0 }];
+    const seen = new Set();
+    let budget = 500000;
+    while (stack.length && budget-- > 0) {
+      const { v, path, depth } = stack.pop();
+      if (!v || typeof v !== "object" || seen.has(v)) continue;
+      if (depth > MAX_DEPTH) return { why: "is nested more than " + MAX_DEPTH + " levels deep", path };
+      seen.add(v);
+      if (Array.isArray(v)) {
+        for (let i = 0; i < v.length; i++) stack.push({ v: v[i], path: path + "[" + i + "]", depth: depth + 1 });
+        continue;
+      }
+      for (const k of Object.keys(v)) {
+        const at = (path ? path + "." : "") + k;
+        if (k === "__proto__") return { why: "uses a \"__proto__\" key, which is not allowed", path: at };
+        stack.push({ v: v[k], path: at, depth: depth + 1 });
+      }
+    }
+    return null;
+  }
+
   function run(process, taxonomy, scenarioCfg) {
     const errors = [], warnings = [];
     const err = m => errors.push(m);
     const warn = m => warnings.push(m);
+
+    [["process", process], ["taxonomy", taxonomy], ["scenario", scenarioCfg]].forEach(([label, obj]) => {
+      const fault = obj && structureFault(obj);
+      // a 200-level path is unreadable, so show where it starts and where it ends
+      const short = p => (p.length > 90 ? p.slice(0, 50) + " … " + p.slice(-30) : p);
+      if (fault) err(label + " data: " + label + (fault.path ? "." + short(fault.path) : "") + " " + fault.why + ".");
+    });
+    if (errors.length) return { errors, warnings };
 
     if (!process || !Array.isArray(process.activities)) return { errors: ["process data: 'activities' must be an array."], warnings };
     if (!taxonomy || typeof taxonomy.families !== "object") return { errors: ["taxonomy data: 'families' must be an object."], warnings };
