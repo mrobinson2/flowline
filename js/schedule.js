@@ -95,19 +95,43 @@ VSM.schedule = (function () {
     const predMap = new Map(acts.map(a => [a.id, new Set(a.predecessors || [])]));
     acts.forEach(a => (a.successors || []).forEach(s => { if (predMap.has(s)) predMap.get(s).add(a.id); }));
 
-    /* 3. effective predecessors: skip excluded activities but inherit their predecessors */
+    /* 3. effective predecessors: skip excluded activities but inherit their predecessors
+
+       Walked with an explicit stack, not recursion. A scenario that switches
+       off a long run of consecutive steps makes this hop once per excluded
+       link, and at a few thousand links the recursive version overflowed the
+       call stack and threw out of build() - which nothing above catches, so the
+       page went blank. js/validate.js already uses Kahn's algorithm over the
+       same graph for exactly this reason; this is the other half of it. */
     const effCache = new Map();
-    function effPreds(id, stack) {
-      if (effCache.has(id)) return effCache.get(id);
-      const out = new Set();
-      predMap.get(id).forEach(p => {
-        if (!byId.has(p)) { warnings.push(id + " references unknown predecessor '" + p + "'"); return; }
-        if (stack.has(p)) throw new Error("Dependency cycle near " + id + " -> " + p);
-        if (includedIds.has(p)) out.add(p);
-        else { stack.add(p); effPreds(p, stack).forEach(x => out.add(x)); stack.delete(p); }
-      });
-      effCache.set(id, out);
-      return out;
+    function effPreds(rootId) {
+      if (effCache.has(rootId)) return effCache.get(rootId);
+      const onPath = new Set();
+      const stack = [{ id: rootId, preds: null, at: 0, out: null }];
+      while (stack.length) {
+        const frame = stack[stack.length - 1];
+        if (frame.preds === null) {
+          frame.preds = [...(predMap.get(frame.id) || [])];
+          frame.out = new Set();
+          onPath.add(frame.id);
+        }
+        let descended = false;
+        while (frame.at < frame.preds.length) {
+          const p = frame.preds[frame.at];
+          if (!byId.has(p)) { warnings.push(frame.id + " references unknown predecessor '" + p + "'"); frame.at++; continue; }
+          if (includedIds.has(p)) { frame.out.add(p); frame.at++; continue; }
+          if (effCache.has(p)) { effCache.get(p).forEach(x => frame.out.add(x)); frame.at++; continue; }
+          if (onPath.has(p)) throw new Error("Dependency cycle near " + frame.id + " -> " + p);
+          stack.push({ id: p, preds: null, at: 0, out: null });
+          descended = true;
+          break;
+        }
+        if (descended) continue;
+        effCache.set(frame.id, frame.out);
+        onPath.delete(frame.id);
+        stack.pop();
+      }
+      return effCache.get(rootId);
     }
 
     /* 4. nodes */
@@ -132,7 +156,7 @@ VSM.schedule = (function () {
         isGate: !!cat.gate || !!a.milestone,
         isMilestone: !!a.milestone,
         duration: resolveDuration(a, scenario, named),
-        preds: Array.from(effPreds(a.id, new Set([a.id]))),
+        preds: Array.from(effPreds(a.id)),
         succs: [],
         handoffsIn: []
       };
