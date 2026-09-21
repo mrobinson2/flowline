@@ -57,13 +57,15 @@
       // keep the working data on screen and say why the new set was refused
       renderIssues(issues);
       toast(issues.errors.length + " error" + (issues.errors.length === 1 ? "" : "s") + " in the data; the previous version is still shown", true);
-      if (!data) {
-        data = VSM.deepClone(VSM.data);
-        describeSource(override);
-      }
-      /* Whatever else happened, if there IS a saved override it is the thing
-         the user needs to be able to throw away. */
-      if (override) $("#btn-reset-data").hidden = false;
+      /* Same objects the happy path uses, not a clone: pinLiveData() decides
+         what to persist by comparing against VSM.data by identity. */
+      if (!data) data = { process: VSM.data.process, taxonomy: VSM.data.taxonomy, scenario: VSM.data.scenario };
+      /* Always re-describe the source. An import sets this line to "loaded
+         from a file" before init() runs, so skipping it here left the panel
+         claiming the new file was in use while the old chart was on screen.
+         It also unhides the discard button whenever an override exists, which
+         is the only way back out of a saved set that will not load. */
+      describeSource(override);
       return false;
     }
     data = candidate;
@@ -198,7 +200,19 @@
   function rebuild() {
     const issues = checkData(data);
     if (issues.errors.length) return;
-    model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes);
+    /* The scheduler sees things validation does not check for (a cycle only
+       visible once a scenario has excluded part of the graph, say). An
+       exception here used to escape into the DOMContentLoaded handler and
+       leave a blank page with no way back, so report it like any other data
+       error and keep the last good chart on screen. */
+    try {
+      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes);
+    } catch (e) {
+      lastIssues = { errors: issues.errors.concat("the schedule could not be built: " + e.message), warnings: issues.warnings };
+      renderIssues(lastIssues);
+      toast("The schedule could not be built: " + e.message, true);
+      return;
+    }
     renderWarnings();
     renderMetrics();
     renderWasteChips();
@@ -250,7 +264,7 @@
     tiles.forEach(t => box.appendChild(h("div", { class: "tile" + (t[3] ? " " + t[3] : "") },
       h("div", { class: "tile-label" }, t[0]), h("div", { class: "tile-value" }, t[1]), h("div", { class: "tile-sub" }, t[2]))));
     // excess breakdown bar by family
-    const fams = data.taxonomy.families;
+    const fams = data.taxonomy.families || {};
     const total = m.sumExcess || 1;
     const bar = h("div", { class: "breakdown" });
     const entries = Object.entries(m.byFamily).filter(([, v]) => v.excess > 0).sort((a, b) => b[1].excess - a[1].excess);
@@ -262,7 +276,10 @@
   function renderWasteChips() {
     const box = $("#waste-chips");
     box.innerHTML = "";
-    const m = model.metrics, wt = data.taxonomy.wasteTypes, fams = data.taxonomy.families;
+    /* validate.js only checks categories and wasteTypes when they are present,
+       so a taxonomy carrying families alone is valid data. Default them here
+       rather than throwing out of the render. */
+    const m = model.metrics, wt = data.taxonomy.wasteTypes || {}, fams = data.taxonomy.families || {};
     const items = Object.keys(wt).map(id => ({ id, label: wt[id].label, code: wt[id].code, color: fams[wt[id].family] }));
     items.push({ id: "none", label: "No waste type (value / enabling)", code: "V/E", color: fams.value });
     items.forEach(it => {
@@ -331,7 +348,11 @@
     /* What the toggles resolve to once implications are followed, so the UI can
        show a lever that is on because another lever demanded it. */
     const resolved = VSM.rules.applyImplications(data.scenario.attributes, state.scenario);
-    const impliedBy = {};
+    /* Null-prototype: keyed by attribute ids out of the scenario data, and
+       validate.js's id rule allows "constructor". Against a plain object the
+       get-or-create below resolves that to Object.prototype.constructor, which
+       is truthy and has no push(), so the sidebar threw and never rebuilt. */
+    const impliedBy = Object.create(null);
     data.scenario.attributes.forEach(a => {
       if (!a.implies || !a.implies.length) return;
       const on = a.type === "boolean" ? state.scenario[a.id] === true : !!state.scenario[a.id];
@@ -514,7 +535,6 @@
     if (!n) { panel.hidden = true; selectedId = null; return; }
     if (document.body.classList.contains("presenting")) return;
     const d = n.duration, a = n.act;
-    const teamName = t => (data.process.teams[t] || {}).label || t;
     const kind = n.wasteDef ? n.wasteDef.label : (n.categoryDef.label || n.category);
     const succs = n.succs.map(s => model.nodeById.get(s).name);
     const preds = n.preds.map(p => model.nodeById.get(p).name);
@@ -561,9 +581,10 @@
       options.forEach(o => { const opt = h("option", { value: o.value }, o.label); if (o.value === (value || "")) opt.selected = true; s.appendChild(opt); });
       return s;
     };
-    const teams = Object.keys(data.process.teams || {}).map(id => ({ value: id, label: data.process.teams[id].label }));
-    const cats = Object.keys(data.taxonomy.categories).map(id => ({ value: id, label: data.taxonomy.categories[id].label }));
-    const wastes = Object.keys(data.taxonomy.wasteTypes).map(id => ({ value: id, label: data.taxonomy.wasteTypes[id].label }));
+    const allTeams = data.process.teams || {}, allCats = data.taxonomy.categories || {}, allWastes = data.taxonomy.wasteTypes || {};
+    const teams = Object.keys(allTeams).map(id => ({ value: id, label: allTeams[id].label }));
+    const cats = Object.keys(allCats).map(id => ({ value: id, label: allCats[id].label }));
+    const wastes = Object.keys(allWastes).map(id => ({ value: id, label: allWastes[id].label }));
     const phases = (data.process.phases || []).map(p => ({ value: p.id, label: p.label }));
     form.appendChild(h("h3", null, "Edit activity"));
     form.appendChild(field("Name", h("input", { name: "name", class: "input", value: a.name || "" })));
@@ -608,18 +629,39 @@
     try { o = JSON.parse(localStorage.getItem(DATA_KEY) || "null"); } catch (e) { o = null; }
     return o && typeof o === "object" && !Array.isArray(o) ? o : {};
   }
+  /* Write it, then read it back. Assigning to a primitive is a silent no-op in
+     sloppy mode, an array loses the property in JSON.stringify, and a storage
+     that accepts a write and drops it never throws, so "setItem did not throw"
+     is not the same as "the edit is saved". Every write of the override goes
+     through here; checking only one of the three call sites left the other two
+     able to report success over data that was never stored. */
+  function writeOverride(o) {
+    localStorage.setItem(DATA_KEY, JSON.stringify(o));
+    const back = readOverride();
+    const kept = Object.keys(o).every(k => back[k] !== undefined);
+    if (!kept) throw new Error("the browser did not keep the change (storage returned something unexpected)");
+    return back;
+  }
+  /* The triple loadData() will rebuild on the next startup. It falls back to
+     the SHIPPED data for anything the override does not carry, so a process
+     checked against whatever is live right now can still be broken against the
+     set that actually loads: with a folder linked, the live taxonomy is the
+     folder's and is never persisted. Pin anything that did not come from the
+     shipped files into the override so the saved set is self-consistent. */
+  function pinLiveData(override) {
+    if (data.taxonomy !== VSM.data.taxonomy) override.taxonomy = data.taxonomy;
+    if (data.scenario !== VSM.data.scenario) override.scenario = data.scenario;
+    return override;
+  }
   function saveProcessOverride(process, how) {
-    const issues = VSM.validate.run(process, data.taxonomy, data.scenario);
+    const override = pinLiveData(readOverride());
+    const issues = VSM.validate.run(process,
+      override.taxonomy || VSM.data.taxonomy,
+      override.scenario || VSM.data.scenario);
     if (issues.errors.length) throw new Error(issues.errors[0]);
-    const override = readOverride();
     override.process = process;
     override.processSource = how || "loaded";
-    localStorage.setItem(DATA_KEY, JSON.stringify(override));
-    /* Read it back. Assigning to a primitive is a silent no-op in sloppy mode,
-       and an array loses the property in JSON.stringify, so "setItem did not
-       throw" is not the same as "the edit is saved". */
-    const back = readOverride();
-    if (!back.process) throw new Error("the browser did not keep the change (storage returned something unexpected)");
+    writeOverride(override);
     $("#data-source").textContent = "Process data " + (how === "edited" ? "edited in this browser" : "loaded from a file") + " (not the shipped file). Export ▾ → Download data/process.data.js to keep it.";
     $("#btn-reset-data").hidden = false;
   }
@@ -710,7 +752,7 @@
 
     const override = readOverride();
     override.process = r.process; override.taxonomy = r.taxonomy; override.scenario = r.scenario;
-    try { localStorage.setItem(DATA_KEY, JSON.stringify(override)); }
+    try { writeOverride(override); }
     catch (e) { toast("Import not saved: " + e.message, true); return; }
     lastImportReport = r.report;
     if (init()) toast("Imported " + file.name + " — " + c.tasks + " tasks, " + c.phases + " phases");
@@ -749,7 +791,7 @@
     reader.onload = () => {
       try {
         const obj = JSON.parse(reader.result);
-        const override = readOverride();
+        const override = pinLiveData(readOverride());
         if (obj.process || obj.taxonomy || obj.scenario) Object.assign(override, obj);
         else if (obj.activities) override.process = obj;
         else if (obj.families) override.taxonomy = obj;
@@ -767,7 +809,7 @@
                                     override.scenario || VSM.data.scenario);
         } catch (err) { throw new Error("the file could not be checked: " + err.message); }
         if (issues.errors.length) { renderIssues(issues); throw new Error(issues.errors[0]); }
-        localStorage.setItem(DATA_KEY, JSON.stringify(override));
+        writeOverride(override);
         /* Only claim success if init() actually accepted the data; toast()
            writes one shared element, so an unconditional success message here
            would paint over the error init() just raised. */
