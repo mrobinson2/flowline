@@ -1,5 +1,5 @@
-/* Regression coverage for the eight issues fixed in 1.0.1 and the ten
-   fixed in 1.0.2 (see CHANGELOG.md).
+/* Regression coverage for the eight issues fixed in 1.0.1, the ten fixed in
+   1.0.2 and the seventeen fixed in 1.0.3 (see CHANGELOG.md).
    Run: node test/regressions.js. Uses only Node built-ins. */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -15,7 +15,14 @@ const task = (id, extra) => Object.assign({ id, name: id, category: "value", dur
 const dataset = activities => ({ process: { units: "hours", hoursPerDay: 8, activities }, taxonomy: clone(shipped.taxonomy), scenario });
 const build = data => V.schedule.build(data.process, data.taxonomy, {}, {});
 let passed = 0;
-async function test(name, fn) { await fn(); passed++; console.log("ok " + name); }
+/* ONLY=<substring> node test/regressions.js runs just the matching groups,
+   which is how each of these was checked to fail against the release it
+   describes before it was checked to pass against this one. */
+const only = process.env.ONLY || "";
+async function test(name, fn) {
+  if (only && !name.includes(only)) return;
+  await fn(); passed++; console.log("ok " + name);
+}
 
 // ZIPs are built in memory, with correct CRCs and optionally forged sizes.
 const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -52,16 +59,42 @@ const cell = (r, ref, text) => '<row r="' + r + '"><c r="' + ref + '" t="inlineS
 
 // Run the actual app handlers in a VM. Only browser presentation and startup
 // wiring are replaced; validation, persistence, editing and import stay real.
+/* Enough of an element for js/app.js's h() and the panel builders to run.
+   Only presentation is faked; the code under test is the real thing. */
+function fakeNode(tag) {
+  const node = {
+    tag, children: [], attrs: {}, style: {}, dataset: {}, hidden: false,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    setAttribute(k, v) { node.attrs[k] = v; },
+    getAttribute(k) { return node.attrs[k]; },
+    addEventListener() {},
+    appendChild(c) { node.children.push(c); return c; },
+    querySelector: () => null,
+    querySelectorAll: () => []
+  };
+  Object.defineProperty(node, "innerHTML", { get: () => node._html || "", set(v) { node._html = v; if (v === "") node.children.length = 0; } });
+  Object.defineProperty(node, "textContent", { get: () => node._text || "", set(v) { node._text = v; } });
+  return node;
+}
 function appHarness(initial) {
   const storage = new Map(), messages = [], elements = new Map();
-  let refuseStorage = false;
+  let refuseStorage = false, dropStorage = false;
   const context = vm.createContext({
     VSM: { ...V, render: { fmt: String, pct: String } },
-    window: { addEventListener() {} },
-    document: { querySelector(s) { if (!elements.has(s)) elements.set(s, {}); return elements.get(s); } },
+    window: { addEventListener() {}, innerWidth: 1400 },
+    document: {
+      querySelector(s) { if (!elements.has(s)) elements.set(s, fakeNode(s)); return elements.get(s); },
+      querySelectorAll: () => [],
+      createElement: tag => fakeNode(tag),
+      createTextNode: t => ({ tag: "#text", text: String(t) })
+    },
     localStorage: {
       getItem: key => storage.get(key) || null,
-      setItem(key, value) { if (refuseStorage) throw new Error("Storage full"); storage.set(key, value); },
+      setItem(key, value) {
+        if (refuseStorage) throw new Error("Storage full");
+        if (dropStorage) return;                 // accepts the write and keeps nothing
+        storage.set(key, value);
+      },
       removeItem: key => storage.delete(key)
     },
     confirm: () => true,
@@ -74,12 +107,19 @@ function appHarness(initial) {
     renderIssues = r => { lastIssues = r; };
     rebuild = () => { model = VSM.schedule.build(data.process, data.taxonomy, {}, {}); };
     init = () => { const ok = loadData(); rebuild(); return ok; };   // mirrors the real init(), which reports whether the data validated
-    VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) };
+    VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+      loadState, buildScenarioControls, buildEditForm,
+      renderWasteChips: () => { rebuild(); renderWasteChips(); } };
   // small public surface`);
   vm.runInContext(src, context);
   const api = context.VSM.testApp;
   api.setData(clone(initial));
-  return { api, storage, messages, refuseStorage() { refuseStorage = true; } };
+  return {
+    api, storage, messages,
+    el: s => { if (!elements.has(s)) elements.set(s, fakeNode(s)); return elements.get(s); },
+    refuseStorage() { refuseStorage = true; },
+    dropStorage() { dropStorage = true; }
+  };
 }
 function form(extra = {}) {
   const values = Object.assign({ name: "A", current: "8", optimal: "4", owner: "", phase: "", category: "value", waste: "", predecessors: "", notes: "" }, extra);
@@ -410,6 +450,280 @@ function form(extra = {}) {
     assert.equal(h.api.safeColor("#ff0000' onmouseover='alert(1)"), "#64748b");
     assert.equal(h.api.safeColor("#3B82F6"), "#3B82F6");
     assert.equal(h.api.esc('a"b\'c<d>e&f'), "a&quot;b&#39;c&lt;d&gt;e&amp;f");
+  });
+
+  /* ==================================================== 1.0.3 findings ==== */
+
+  /* A fake DOM just big enough for js/render.js. The renderer is the one module
+     the Node entry point cannot load, and two of these findings live in it. */
+  function withRenderer(fn) {
+    const node = tag => {
+      const e = { tag, children: [], attrs: {}, style: {} };
+      e.setAttribute = (k, v) => { e.attrs[k] = v; };
+      e.appendChild = c => { e.children.push(c); return c; };
+      Object.defineProperty(e, "textContent", { get: () => e._t || "", set(v) { e._t = v; } });
+      return e;
+    };
+    const saved = { document: global.document, window: global.window };
+    global.document = {
+      createElementNS: (ns, tag) => node(tag),
+      createElement: tag => {
+        const e = node(tag);
+        // measureText costs real time per character, as the browser's does:
+        // a stub that just reads .length hides a quadratic label fitter
+        e.getContext = () => ({ font: "", measureText(s) { let w = 0; for (let i = 0; i < s.length; i++) w += 6; return { width: w }; } });
+        return e;
+      }
+    };
+    global.window = { innerWidth: 1400, innerHeight: 900 };
+    delete require.cache[require.resolve("../js/render.js")];
+    require("../js/render.js");
+    try { return fn(V.render); }
+    finally { global.document = saved.document; global.window = saved.window; }
+  }
+  const walk = (n, out = []) => { out.push(n); (n.children || []).forEach(c => walk(c, out)); return out; };
+
+  await test("comments and CDATA no longer make the XML scan quadratic", async () => {
+    /* The 1.0.2 comment handling restarted three indexOf searches from the
+       cursor on every comment. 60,000 empty comments in a 1 KB file took 20s. */
+    const ms = [];
+    for (const k of [40000, 160000]) {                       // 4x the input
+      const inner = "<!--x-->".repeat(k) + '<c r="A1" t="inlineStr"><is><t>ok</t></is></c>';
+      const started = Date.now();
+      const sheets = await V.table.parseXLSX(zip([
+        { name: "xl/workbook.xml", text: '<workbook><sheets><sheet name="Activities" r:id="rId1"/></sheets></workbook>' },
+        { name: "xl/worksheets/sheet1.xml", text: '<worksheet><sheetData><row r="1">' + inner + "</row></sheetData></worksheet>" }
+      ]));
+      assert.equal(sheets.Activities[0][0], "ok");           // and it still parses
+      ms.push(Date.now() - started);
+    }
+    assert.ok(ms[1] < 4000, "160,000 comments took " + ms[1] + "ms; the scan has gone quadratic again");
+    // quadratic would be ~16x for 4x the input; allow plenty of slack for a cold JIT
+    assert.ok(ms[1] < Math.max(ms[0], 5) * 8, "scan time grew " + ms[0] + "ms -> " + ms[1] + "ms, faster than linearly");
+  });
+
+  await test("a huge duration cannot make the renderer draw a gridline per tick", () => {
+    withRenderer(render => {
+      const times = [];
+      for (const current of [40, 1e8, 1e18, 1e300]) {
+        const d = dataset([task("A", { duration: { current, optimal: 0 } })]);
+        const model = build(d);
+        const L = V.layout.interactive(1, { width: 1200, zoom: 1, density: "normal", columns: true });
+        const started = Date.now();
+        const svg = render.draw(model, { layout: L, view: "current", display: {}, filters: null, scenarioSummary: "", theme: "dark" });
+        times.push(Date.now() - started);
+        const lines = walk(svg).filter(e => e.tag === "line").length;
+        assert.ok(lines < 600, "drew " + lines + " lines for a duration of " + current);
+      }
+      assert.ok(Math.max(...times) < 2000, "draw took " + Math.max(...times) + "ms; the tick loop is unbounded again");
+    });
+  });
+
+  await test("a very long activity name does not hang the label fitter", () => {
+    withRenderer(render => {
+      // the old fitter re-measured the whole string once per character dropped
+      const d = dataset([task("A", { name: "x".repeat(200000) })]);
+      const L = V.layout.interactive(1, { width: 1200, zoom: 1, density: "normal", columns: true });
+      const started = Date.now();
+      render.draw(build(d), { layout: L, view: "current", display: {}, filters: null, scenarioSummary: "", theme: "dark" });
+      const ms = Date.now() - started;
+      assert.ok(ms < 1500, "a 200,000-character label took " + ms + "ms");
+    });
+  });
+
+  await test("the legend survives a family the taxonomy does not define", () => {
+    withRenderer(render => {
+      // no category on the activity -> schedule falls back to family "value",
+      // which this taxonomy has no entry for. Presentation and every export.
+      const tax = { families: { ops: { label: "Ops", optimal: "#3b82f6", excess: "#93c5fd" } }, categories: {}, wasteTypes: {} };
+      const process = { units: "hours", activities: [{ id: "A", name: "A", duration: { current: 2, optimal: 1 }, predecessors: [] }] };
+      assert.equal(V.validate.run(process, tax, scenario).errors.length, 0, "this data really is valid");
+      const model = V.schedule.build(process, tax, {}, {});
+      const L = V.layout.presentation(1, { showMetrics: true, columns: true });
+      assert.ok(L.showLegend);
+      assert.doesNotThrow(() => render.draw(model, { layout: L, view: "current", display: {}, filters: null, scenarioSummary: "", theme: "dark" }));
+    });
+  });
+
+  await test("a taxonomy with no categories or wasteTypes still renders the panels", () => {
+    const tax = { families: { value: { label: "V", optimal: "#3b82f6", excess: "#93c5fd" } } };
+    const process = { units: "hours", activities: [{ id: "A", name: "A", duration: { current: 2, optimal: 1 }, predecessors: [] }] };
+    assert.equal(V.validate.run(process, tax, scenario).errors.length, 0, "this data really is valid");
+    const h = appHarness({ process, taxonomy: tax, scenario });
+    h.api.loadState();
+    assert.doesNotThrow(() => h.api.renderWasteChips());
+    assert.doesNotThrow(() => h.api.buildEditForm(process.activities[0]));
+  });
+
+  await test("an attribute id that is an Object.prototype member does not break the sidebar", () => {
+    const scen = {
+      attributes: [
+        { id: "rfp", label: "RFP", type: "boolean", default: true, implies: ["constructor"] },
+        { id: "constructor", label: "Constructor toggle", type: "boolean", default: false }
+      ],
+      rules: {}, presets: []
+    };
+    const d = { process: { units: "hours", activities: [task("A")] }, taxonomy: clone(shipped.taxonomy), scenario: scen };
+    assert.equal(V.validate.run(d.process, d.taxonomy, d.scenario).errors.length, 0, "this data really is valid");
+    const h = appHarness(d);
+    h.api.loadState();
+    assert.doesNotThrow(() => h.api.buildScenarioControls());
+  });
+
+  await test("a long chain of excluded activities does not overflow the stack", () => {
+    const acts = [];
+    const n = 20000;
+    for (let i = 0; i < n; i++) {
+      acts.push(task("T" + i, { predecessors: i ? ["T" + (i - 1)] : [], when: i < n - 1 ? false : undefined }));
+    }
+    const d = dataset(acts);
+    assert.equal(V.validate.run(d.process, d.taxonomy, d.scenario).errors.length, 0);
+    let model;
+    assert.doesNotThrow(() => { model = build(d); });
+    assert.equal(model.nodes.length, 1);
+    // and a cycle among the excluded ones is still caught
+    const cyc = dataset([
+      task("A", { predecessors: ["B"], when: false }),
+      task("B", { predecessors: ["A"], when: false }),
+      task("C", { predecessors: ["A"] })
+    ]);
+    assert.throws(() => build(cyc), /Dependency cycle/);
+  });
+
+  await test("validation refuses a __proto__ key and absurd nesting", () => {
+    const withProto = JSON.parse('{"units":"hours","activities":[{"id":"A","name":"A","category":"value","duration":{"current":1,"optimal":1},"predecessors":[],"__proto__":{"x":1}}]}');
+    assert.match(V.validate.run(withProto, shipped.taxonomy, scenario).errors[0], /__proto__/);
+    const deep = n => JSON.parse('{"a":'.repeat(n) + "1" + "}".repeat(n));
+    const nested = { units: "hours", activities: [task("A", { junk: deep(5000) })] };
+    const issues = V.validate.run(nested, shipped.taxonomy, scenario);
+    assert.match(issues.errors[0], /nested more than/);
+    // JSON.stringify is what would have thrown later, so nothing valid may reach it
+    assert.doesNotThrow(() => JSON.stringify({ units: "hours", activities: [task("A", { junk: deep(50) })] }));
+    assert.equal(V.validate.run({ units: "hours", activities: [task("A", { junk: deep(50) })] }, shipped.taxonomy, scenario).errors.length, 0);
+  });
+
+  await test("prototype members are not mistaken for layout or export values", () => {
+    for (const name of ["constructor", "toString", "valueOf", "nonsense"]) {
+      const L = V.layout.interactive(5, { density: name, width: 1200 });
+      assert.equal(L.rowH, 28, "density " + name);
+      assert.ok(isFinite(L.height) && isFinite(L.font));
+    }
+    const cfg = {
+      attributes: [{ id: "constructor", label: "C", type: "boolean", default: false }, { id: "ai", label: "AI", type: "boolean", default: false }],
+      presets: [{ id: "p1", label: "P1", set: { ai: true } }], rules: {}
+    };
+    const model = build(dataset([task("A")]));
+    const profiles = V.exportWorkbook.sheets(model, { scenarioCfg: cfg, scenarioSummary: "" }).find(s => s.name === "Profiles");
+    assert.equal(profiles.rows[0].constructor, "", "a profile silent about a toggle must export as blank");
+    assert.equal(profiles.rows[0].ai, "Yes");
+  });
+
+  await test("the importer keeps a phase or team named like a prototype member", () => {
+    const r = V.import.fromSheets({
+      "Task List": [
+        ["ID", "Phase", "Task", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+        ["T1", "Constructor", "Thing", "Constructor", "4", "4"],
+        ["T2", "Build", "Other", "Platform Ops", "2", "2"]
+      ]
+    }, {});
+    assert.deepEqual(r.process.phases.map(p => p.id), ["constructor", "build"]);
+    assert.deepEqual(Object.keys(r.process.teams).sort(), ["constructor", "platform-ops"]);
+    assert.equal(r.report.counts.teams, 2);
+    const model = V.schedule.build(r.process, r.taxonomy, V.rules.defaults(r.scenario.attributes), r.scenario.rules);
+    assert.equal(model.nodes[0].team.label, "Constructor", "the team must be the imported one, not Object");
+  });
+
+  await test("a blank cell is not a zero", () => {
+    const headers = ["ID", "Phase", "Task", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)",
+      "Optimized Lead Time (hrs)", "Optimized Cycle Time (hrs)", "%C&A"];
+    const r = V.import.fromSheets({ "Task List": [headers, ["T1", "Build", "Thing", "Ops", "8", "8", "", ""]] }, {});
+    const a = r.process.activities[0];
+    assert.deepEqual(a.duration, { current: 16, optimal: 16 }, "a blank Optimized column falls back to the current time");
+    assert.equal(a.pctCA, undefined, "a blank %C&A is not 0% complete and accurate");
+    assert.equal(a.source, undefined, "a workbook with no CPM columns has no source figures");
+    assert.equal(r.report.totals.elapsedOptimal, 16);
+    const model = V.schedule.build(r.process, r.taxonomy, V.rules.defaults(r.scenario.attributes), r.scenario.rules);
+    assert.equal(V.import.reconcile(r.process, model).checked, 0, "nothing to reconcile against, so nothing is claimed");
+  });
+
+  await test("a Task List with no Phase column still imports", () => {
+    const r = V.import.fromSheets({
+      "Task List": [["ID", "Task", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"], ["T1", "Thing", "Ops", "4", "4"]]
+    }, {});
+    assert.equal(r.report.errors.length, 0, r.report.errors.join(" | "));
+    assert.equal(r.process.activities.length, 1);
+    assert.equal(r.process.activities[0].phase, undefined);
+  });
+
+  await test("long condition phrases do not collapse onto one attribute id", () => {
+    const base = "Applies when the customer is in the regulated segment";
+    const headers = ["ID", "Phase", "Task", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Applies When"];
+    const r = V.import.fromSheets({
+      "Task List": [headers, ["T1", "Build", "A", "Ops", "1", "1", base], ["T2", "Build", "B", "Ops", "1", "1", base + " and has a DPA"]]
+    }, {});
+    const ids = r.scenario.attributes.map(a => a.id);
+    assert.equal(new Set(ids).size, ids.length, "duplicate attribute ids: " + ids.join(", "));
+    assert.equal(V.validate.run(r.process, r.taxonomy, r.scenario).errors.length, 0,
+      "the importer produced a model its own validator rejects");
+  });
+
+  await test("full scope reaches steps that only a choice toggle routes to", () => {
+    const r = V.import.fromSheets({
+      "Task List": [["ID", "Phase", "Task", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+        ["T1", "Build", "Base", "Ops", "1", "1"], ["T2", "Build", "Greenfield only", "Ops", "1", "1"], ["T3", "Build", "Dead row", "Ops", "1", "1"]],
+      "Toggles": [["Toggle ID", "Label", "Type", "Options", "Default", "Group"],
+        ["workType", "Work type", "choice", "Greenfield;Brownfield", "Brownfield", "Scope"]],
+      "Scenario Matrix": [["Task ID", "Baseline", "workType=Greenfield"], ["T1", "Yes", ""], ["T2", "No", "R"], ["T3", "No", ""]]
+    }, {});
+    const full = r.scenario.presets.find(p => p.id === "full-scope");
+    assert.equal(full.set.workType, "Greenfield", "full scope must pick the value that reaches T2");
+    const resolved = V.rules.applyImplications(r.scenario.attributes, Object.assign(V.rules.defaults(r.scenario.attributes), full.set));
+    const model = V.schedule.build(r.process, r.taxonomy, resolved, r.scenario.rules, r.scenario.attributes);
+    assert.ok(model.nodes.some(n => n.id === "T2"), "the complete map left out an enum-routed step");
+    assert.ok(r.report.warnings.some(w => /T3.*can never appear/.test(w)), "a row nothing can reach must be reported");
+  });
+
+  await test("an import validated against a linked folder's taxonomy persists it too", () => {
+    /* loadData() rebuilds override + SHIPPED, so persisting only the process
+       saved something checked against data nobody kept. */
+    const taxonomy = clone(shipped.taxonomy);
+    taxonomy.categories.bespoke = { label: "Bespoke", family: "value", code: "X" };
+    const h = appHarness({ process: { units: "hours", activities: [task("A", { category: "bespoke" })] }, taxonomy, scenario });
+    h.api.applyEdit("A", form({ current: "16", category: "bespoke" }));
+    const stored = JSON.parse(h.storage.get("vsm.data.v1"));
+    assert.ok(stored.taxonomy, "the taxonomy the edit was checked against was not saved");
+    h.api.setData(null);
+    assert.equal(h.api.loadData(), true, "the saved set does not load cleanly on the next startup");
+    assert.equal(h.api.getData().process.activities[0].duration.current, 16);
+  });
+
+  await test("no import path reports success over a storage that keeps nothing", () => {
+    for (const run of [
+      h => h.api.applyEdit("A", form({ current: "16" })),
+      h => h.api.loadJSONFile({ name: "d.json", content: JSON.stringify({ activities: [task("A", { duration: { current: 3, optimal: 1 } })] }) })
+    ]) {
+      const h = appHarness(dataset([task("A")]));
+      h.dropStorage();
+      run(h);
+      const last = h.messages.at(-1);
+      assert.ok(last && last.error, "reported success over a write that was dropped: " + (last && last.message));
+      assert.match(last.message, /did not keep the change|not saved|Could not load/);
+    }
+  });
+
+  await test("a refused set is described, not left claiming the import worked", () => {
+    /* The import path writes "Process data loaded from a file" BEFORE init()
+       runs. When the recombined set is then refused, the old code kept working
+       data on screen but skipped describeSource, so the panel went on claiming
+       the new file was in use. */
+    const h = appHarness(dataset([task("A")]));
+    h.el("#data-source").textContent = "Process data loaded from a file (not the shipped file). Export ▾ → Download data/process.data.js to keep it.";
+    h.el("#btn-reset-data").hidden = true;
+    h.storage.set("vsm.data.v1", JSON.stringify({ process: { activities: [task("bad", { predecessors: ["nope"] })] }, processSource: "loaded" }));
+    assert.equal(h.api.loadData(), false);
+    assert.equal(h.api.getData().process.activities[0].id, "A", "the working data must stay on screen");
+    assert.equal(h.el("#btn-reset-data").hidden, false, "the discard button stayed hidden");
+    assert.match(h.el("#data-source").textContent, /Link a folder or download/, "the panel was not re-described after the refusal");
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");
