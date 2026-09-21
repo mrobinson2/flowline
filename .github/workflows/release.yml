@@ -1,0 +1,43 @@
+name: release
+
+# Builds the standalone single-file app and attaches it to the GitHub release,
+# so the download promised in the README always matches the tagged source.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run the test suite
+        run: node test/run-tests.js
+
+      - name: Run security and correctness regressions
+        run: node test/regressions.js
+
+      - name: Build the standalone file
+        run: node tools/bundle.js
+
+      - name: Check the build is self-contained
+        run: |
+          if grep -qE '<script src=|<link rel="stylesheet" href=' dist/flowline.html; then
+            echo "dist/flowline.html still references external files"; exit 1
+          fi
+          echo "ok: $(du -h dist/flowline.html | cut -f1) self-contained"
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/flowline.html

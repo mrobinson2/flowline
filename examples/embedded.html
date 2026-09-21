@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Embedded chart (host owns the page)</title>
+<style>
+  /* deliberately nothing from the app's own stylesheet: the host styles its own page */
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #0B1220; color: #E2E8F0; }
+  header { padding: 14px 20px; border-bottom: 1px solid #1E293B; display: flex; gap: 10px; align-items: center; }
+  select, button { background: #111A2E; color: #E2E8F0; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; }
+  #host { padding: 12px; }
+  .note { color: #64748B; margin-left: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <strong>Host application chrome</strong>
+    <select id="profile"></select>
+    <select id="view">
+      <option value="current">Current</option>
+      <option value="opportunity">Opportunity</option>
+      <option value="waste">Waste / Friction</option>
+      <option value="optimal">Optimal</option>
+    </select>
+    <button id="theme">Light</button>
+    <span class="note" id="stat"></span>
+  </header>
+  <div id="host"></div>
+
+<script src="../js/registry.js"></script>
+<script src="../js/units.js"></script>
+<script src="../js/schema.js"></script>
+<script src="../data/taxonomy.data.js"></script>
+<script src="../data/scenario.data.js"></script>
+<script src="../data/process.data.js"></script>
+<script src="../js/validate.js"></script>
+<script src="../js/rules.js"></script>
+<script src="../js/schedule.js"></script>
+<script src="../js/layout.js"></script>
+<script src="../js/render.js"></script>
+<script src="../js/analyze.js"></script>
+<script src="../js/embed.js"></script>
+<script>
+  /* This is the whole integration. A React component's useEffect body would
+     be these six lines, with update() called from a props change and
+     destroy() from the cleanup function. */
+  const chart = VSM.embed.create(document.getElementById("host"), {
+    profile: "build-paved", view: "current", theme: "dark",
+    onSelect: (act, node) => console.log("selected", act.id, node.duration)
+  });
+
+  const opts = chart.getScenarioOptions();
+  const sel = document.getElementById("profile");
+  opts.profiles.forEach(p => sel.add(new Option(p.label, p.id)));
+  sel.value = "build-paved";
+
+  const stat = () => {
+    const a = chart.analyze();
+    document.getElementById("stat").textContent =
+      a.tasks + " tasks · " + a.pathDays + " d critical path · parallelism " + a.parallelism + "x";
+  };
+  stat();
+
+  sel.onchange = () => { chart.update({ profile: sel.value }); stat(); };
+  document.getElementById("view").onchange = e => chart.update({ view: e.target.value });
+  let dark = true;
+  document.getElementById("theme").onclick = e => {
+    dark = !dark; chart.update({ theme: dark ? "dark" : "light" });
+    document.body.style.background = dark ? "#0B1220" : "#FFFFFF";
+    document.body.style.color = dark ? "#E2E8F0" : "#0F172A";
+    e.target.textContent = dark ? "Light" : "Dark";
+  };
+</script>
+</body>
+</html>

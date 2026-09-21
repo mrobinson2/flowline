@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flowline - Value Stream Timeline</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">VS</span>
+    <div>
+      <h1 id="title">Value Stream</h1>
+      <div id="subtitle" class="subtitle"></div>
+    </div>
+  </div>
+
+  <nav class="views" aria-label="View">
+    <button type="button" data-view="current" class="on" title="Stacked bars: necessary time + removable time on today's schedule">Current</button>
+    <button type="button" data-view="opportunity" title="Necessary time greyed out; removable time stands out">Opportunity</button>
+    <button type="button" data-view="waste" title="Value work de-emphasized; handoffs, gates, queues and rework emphasized">Waste / Friction</button>
+    <button type="button" data-view="optimal" title="The schedule if every activity ran at its optimal duration">Optimal</button>
+  </nav>
+
+  <div class="actions">
+    <button type="button" id="btn-sidebar" class="ghost" title="Show or hide the options panel on the left">Options Panel</button>
+    <button type="button" id="btn-metrics" class="ghost" title="Show or hide the metrics strip across the top">Metrics Panel</button>
+    <button type="button" id="btn-theme" class="ghost" title="Switch between dark and light mode (applies to exports too)">Light mode</button>
+    <div class="menu">
+      <button type="button" class="ghost" id="btn-export-menu" aria-haspopup="true" aria-expanded="false">Export ▾</button>
+      <div class="menu-list">
+        <button type="button" data-export="png">PNG · 1920×1080</button>
+        <button type="button" data-export="png2x">PNG · 3840×2160</button>
+        <button type="button" data-export="svg">SVG</button>
+        <button type="button" data-export="copy">Copy to clipboard (PNG)</button>
+        <hr>
+        <button type="button" data-export="xlsx">Excel workbook (.xlsx, Task List format)</button>
+        <button type="button" data-export="csv">CSV (Task List, columns A–Y)</button>
+        <button type="button" data-export="json">JSON bundle (process, taxonomy, scenario)</button>
+        <button type="button" data-export="datajs">Download data/process.data.js</button>
+      </div>
+    </div>
+    <label class="ghost btn-file" title="Import an Excel workbook (.xlsx), a CSV, or a .json file. Worksheets are matched by name; any sheet the app does not recognise is left alone. You can also drop the file on the page.">
+      Import <input type="file" id="file-json" accept=".xlsx,.csv,.json,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </label>
+    <button type="button" id="btn-present" class="primary">Presentation</button>
+  </div>
+</header>
+
+<div class="main">
+  <aside id="sidebar">
+    <section>
+      <h3>Scenario</h3>
+      <select id="preset" class="select"></select>
+      <div id="scenario-controls"></div>
+    </section>
+
+    <section>
+      <h3>Waste categories <small>click to isolate</small></h3>
+      <div id="waste-chips" class="chips"></div>
+    </section>
+
+    <section>
+      <h3>Filters</h3>
+      <input id="search" type="search" class="input" placeholder="Search activities, teams, descriptions…">
+      <details>
+        <summary>Responsible team</summary>
+        <div id="owner-filter" class="checklist"></div>
+      </details>
+      <label class="check"><input type="checkbox" id="opt-hideNonMatching"><span>Hide non-matching rows (instead of dimming)</span></label>
+      <button type="button" id="btn-clear-filters" class="ghost small">Clear filters</button>
+    </section>
+
+    <section>
+      <h3>Display</h3>
+      <label class="field"><span>Dependency lines</span>
+        <select id="opt-links" class="select">
+          <option value="all">All (handoffs highlighted)</option>
+          <option value="handoffs">Handoffs only</option>
+          <option value="none">None</option>
+        </select>
+      </label>
+      <label class="field"><span>Row density</span>
+        <select id="opt-density" class="select">
+          <option value="comfortable">Comfortable</option>
+          <option value="normal">Normal</option>
+          <option value="compact">Compact</option>
+        </select>
+      </label>
+      <label class="field"><span>Timeline zoom <b id="zoom-val">1.0x</b></span>
+        <input type="range" id="opt-zoom" min="1" max="4" step="0.1" value="1">
+      </label>
+      <label class="check"><input type="checkbox" id="opt-phases"><span>Show phase bands</span></label>
+      <label class="check" title="Show the team and the current / optimal / removable numbers beside every row while you work"><input type="checkbox" id="opt-columns"><span>Owner and duration columns</span></label>
+      <label class="check"><input type="checkbox" id="opt-critical"><span>Underline the critical path</span></label>
+      <label class="check"><input type="checkbox" id="opt-presentMetrics"><span>Metrics strip in presentation / export</span></label>
+      <label class="check" title="Off keeps the slide clean; on carries the owner and duration columns onto the exported slide too"><input type="checkbox" id="opt-presentColumns"><span>Owner / duration columns on slides</span></label>
+    </section>
+
+    <section>
+      <h3>Data source</h3>
+      <div id="data-source" class="hint"></div>
+      <div class="btn-row">
+        <button type="button" id="btn-link-folder" class="ghost small" title="Pick the app folder (or its data folder). The app can then re-read the files after you edit them, and write your in-app edits back.">Link data folder</button>
+        <button type="button" id="btn-reload-folder" class="ghost small" hidden title="Re-read the data files from the linked folder">Reload</button>
+        <button type="button" id="btn-save-folder" class="ghost small" hidden title="Write the current data back to the linked folder">Save</button>
+        <button type="button" id="btn-unlink-folder" class="ghost small" hidden>Unlink</button>
+      </div>
+      <button type="button" id="btn-reset-data" class="ghost small" hidden>Discard loaded data</button>
+      <button type="button" id="btn-reset-state" class="ghost small">Reset scenario &amp; settings</button>
+      <div id="warnings" class="warnings" hidden></div>
+    </section>
+  </aside>
+
+  <div class="content">
+    <div id="metrics" class="metrics"></div>
+    <div id="chart-wrap"><div id="chart"></div></div>
+  </div>
+
+  <aside id="details" class="details" hidden></aside>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<div id="present" hidden>
+  <div class="present-toolbar">
+    <button type="button" id="btn-exit-present" class="ghost">← Exit</button>
+    <button type="button" id="btn-theme-present" class="ghost">Light mode</button>
+    <span id="present-rows" class="hint"></span>
+    <span class="spacer"></span>
+    <button type="button" data-export="png" class="ghost">PNG</button>
+    <button type="button" data-export="png2x" class="ghost">PNG 2×</button>
+    <button type="button" data-export="svg" class="ghost">SVG</button>
+    <button type="button" data-export="copy" class="primary">Copy</button>
+  </div>
+  <div id="present-stage"></div>
+</div>
+
+<!-- data (plain JSON inside a one-line wrapper so the app works from file://) -->
+<script src="js/registry.js"></script>
+<script src="js/units.js"></script>
+<script src="js/schema.js"></script>
+<script src="data/taxonomy.data.js"></script>
+<script src="data/scenario.data.js"></script>
+<script src="data/process.data.js"></script>
+<!-- engine -->
+<script src="js/validate.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/schedule.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/render.js"></script>
+<script src="js/export.js"></script>
+<script src="js/table.js"></script>
+<script src="js/import.js"></script>
+<script src="js/analyze.js"></script>
+<script src="js/export-workbook.js"></script>
+<script src="js/embed.js"></script>
+<script src="js/files.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+name: ci
+
+# Runs on every push and pull request. The suite includes a check that no
+# company-specific names have crept back into the source tree, which is the
+# thing most likely to slip through review on a repo like this.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run the test suite
+        run: node test/run-tests.js
+
+      - name: Run security and correctness regressions
+        run: node test/regressions.js
+
+      - name: Confirm the standalone build still builds
+        run: node tools/bundle.js
