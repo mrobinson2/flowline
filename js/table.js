@@ -325,20 +325,60 @@ VSM.table = (function () {
     }
     return out;
   }
+  /* Comment and CDATA scanning.
+
+     These two functions used to ask indexOf for the next "<!--", the next
+     "<![CDATA[" and the next close tag on EVERY comment, each time starting
+     over from the cursor. A search for a needle the part does not contain
+     scans to the end of the part, so the cost grew with the square of the
+     number of comments: a 1 KB workbook carrying 60,000 empty comments took
+     20 seconds, which is the same hang the attribute scanner was rewritten to
+     remove, reintroduced one function along.
+
+     Caching each indexOf and only re-running it once its answer fell behind
+     the cursor made the algorithm linear on paper, and it still ran quadratic
+     in practice: once a search had seen more than one string representation
+     the call sites fell off their fast path and every lookup scanned the whole
+     part again. So both functions now do what attrs() does - walk the string
+     once, one character at a time, with a cursor that only ever moves forward.
+     There is nothing left for an engine to be clever about. */
+  const LT = 60, BANG = 33, DASH = 45;
+  /* index just past the terminator, or -1 if it never arrives */
+  function skipPast(s, term, from) {
+    const n = s.length, first = term.charCodeAt(0), len = term.length;
+    for (let i = from; i <= n - len; i++) {
+      if (s.charCodeAt(i) === first && s.startsWith(term, i)) return i + len;
+    }
+    return -1;
+  }
+  /* Is a comment or CDATA section opening at i? Returns its terminator, or "". */
+  function opensSkippable(s, i) {
+    if (s.charCodeAt(i) !== LT || s.charCodeAt(i + 1) !== BANG) return "";
+    if (s.charCodeAt(i + 2) === DASH && s.charCodeAt(i + 3) === DASH) return "-->";
+    if (s.startsWith("[CDATA[", i + 2)) return "]]>";
+    return "";
+  }
   /* Find the real close tag, stepping over comments and CDATA sections so a
      literal "</t>" written inside either one does not truncate the element. */
   function findClose(xml, close, from) {
+    const n = xml.length, first = close.charCodeAt(0), len = close.length;
     let i = from;
-    while (i <= xml.length) {
-      const end = xml.indexOf(close, i);
-      const cm = xml.indexOf("<!--", i), cd = xml.indexOf("<![CDATA[", i);
-      let at = -1, term = "";
-      if (cm >= 0 && (end < 0 || cm < end)) { at = cm; term = "-->"; }
-      if (cd >= 0 && (end < 0 || cd < end) && (at < 0 || cd < at)) { at = cd; term = "]]>"; }
-      if (at < 0) return end;
-      const skip = xml.indexOf(term, at + term.length);
-      if (skip < 0) return end;                       // unterminated; fall back to the literal match
-      i = skip + term.length;
+    while (i <= n - len) {
+      if (xml.charCodeAt(i) === LT) {
+        const term = opensSkippable(xml, i);
+        if (term) {
+          const past = skipPast(xml, term, i + (term === "-->" ? 4 : 9));
+          if (past < 0) {
+            // unterminated; fall back to the first literal match, as before
+            for (let j = i; j <= n - len; j++) if (xml.charCodeAt(j) === first && xml.startsWith(close, j)) return j;
+            return -1;
+          }
+          i = past;
+          continue;
+        }
+      }
+      if (xml.charCodeAt(i) === first && xml.startsWith(close, i)) return i;
+      i++;
     }
     return -1;
   }
@@ -363,20 +403,22 @@ VSM.table = (function () {
   /* Comments carry no data; CDATA carries it verbatim and must not be
      entity-decoded a second time. */
   function plain(str) {
-    let out = "", i = 0;
-    while (i < str.length) {
-      const cm = str.indexOf("<!--", i), cd = str.indexOf("<![CDATA[", i);
-      let at = -1, term = "", keep = false;
-      if (cm >= 0) { at = cm; term = "-->"; }
-      if (cd >= 0 && (at < 0 || cd < at)) { at = cd; term = "]]>"; keep = true; }
-      if (at < 0) { out += unesc(str.slice(i)); break; }
-      out += unesc(str.slice(i, at));
-      const end = str.indexOf(term, at + term.length);
-      if (end < 0) break;                                     // unterminated: drop the remainder
-      if (keep) out += str.slice(at + 9, end);                // CDATA payload, already literal
-      i = end + term.length;
+    const n = str.length;
+    let out = "", seg = 0, i = 0;                     // seg = start of the run of ordinary text
+    while (i < n) {
+      if (str.charCodeAt(i) !== LT) { i++; continue; }
+      const term = opensSkippable(str, i);
+      if (!term) { i++; continue; }
+      const open = term === "-->" ? 4 : 9;
+      const past = skipPast(str, term, i + open);
+      if (past < 0) { out += unesc(str.slice(seg, i)); return out; }   // unterminated: drop the remainder
+      out += unesc(str.slice(seg, i));
+      // CDATA payload is already literal and must not be entity-decoded again
+      if (term === "]]>") out += str.slice(i + 9, past - 3);
+      i = past;
+      seg = past;
     }
-    return out;
+    return out + unesc(str.slice(seg));
   }
   const textOf = inner => nodes(inner, "t").map(n => plain(n.inner)).join("");
   function firstText(inner, tag) {
