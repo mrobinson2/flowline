@@ -16,7 +16,7 @@ Two of these are hangs that any imported file can trigger, and they are the reas
 
 ### Crashes on data that validates
 
-4. **The legend read a family the taxonomy need not define (medium).** `category` is optional on an activity, and `js/schedule.js` falls back to the family `value`, which a taxonomy is not obliged to have. `schedule.js` guards that with a default colour; `drawLegend()` in `js/render.js` read `fams[f].optimal` straight through one line below a guarded lookup of the same thing. Presentation mode and every PNG and SVG export threw. It now falls back to the same neutral colour.
+4. **The legend read a family the taxonomy need not define (medium).** `category` is optional on an activity, and `js/schedule.js` falls back to the family `value`, which a taxonomy is not obliged to have. `schedule.js` guards that with a default color; `drawLegend()` in `js/render.js` read `fams[f].optimal` straight through one line below a guarded lookup of the same thing. Presentation mode and every PNG and SVG export threw. It now falls back to the same neutral color.
 
 5. **Panels read taxonomy sections that validation treats as optional (medium).** `validate.js` only checks `categories` and `wasteTypes` when they are present, so a taxonomy carrying `families` alone is valid data. The waste chips and the edit form called `Object.keys` on both without a default and threw out of the render. Both default now.
 

@@ -1,338 +1,227 @@
 # Flowline
 
-A single-page, no-server app that turns a value stream into a scenario-driven Gantt timeline and makes process waste visible: how long each activity takes today, how much of that time is necessary, how much is removable, where work waits, and where it changes hands.
+**See where the time goes. Find where you could save it.**
 
-Open `index.html` in a browser. No install, no build, no network.
+Load your process, turn on the conditions that apply to the work in front of you, and the chart shows how long it takes today, how much of that time is necessary, how much could come out, where work waits, and where it changes hands.
 
-**Maintenance release 1.0.1:** fixes eight reviewed security and correctness
-issues. See [CHANGELOG.md](CHANGELOG.md) for the changes, workbook size limits,
-CSV safety behavior and validation results. A ready-to-use handoff prompt is in
-[FIX_SUMMARY_PROMPT.md](FIX_SUMMARY_PROMPT.md). The standalone app is
-`dist/flowline.html`. Run both `node test/run-tests.js` and
-`node test/regressions.js` before rebuilding with `node tools/bundle.js`.
+It runs as a single HTML file with no server, no build and no network. The repository also includes an example [Backstage](https://backstage.io) frontend plugin so the same chart can live in a developer portal, though it has not yet been run inside a real Backstage build. See [BACKSTAGE.md](BACKSTAGE.md).
 
-## Folder
+![Flowline showing an application delivery value stream](docs/images/01-app-dark.png)
 
-```
-flowline/
-├── index.html                 the app shell (controls, panels, script includes)
-├── css/app.css                application chrome (dark theme)
-├── js/
-│   ├── registry.js            VSM namespace + data registry
-│   ├── units.js               what time is measured in (days vs hours) - one place
-│   ├── schema.js              THE WORKBOOK'S SHAPE: column names, picklists     <- edit when a header changes
-│   ├── validate.js            checks the data and reports errors by activity id
-│   ├── rules.js               declarative rules engine (which activities appear)
-│   ├── schedule.js            scheduler: inclusion, durations, ES/EF, float, handoffs, metrics
-│   ├── layout.js              size calculations (interactive vs. 16:9 presentation)
-│   ├── render.js              SVG renderer (bars, gates, handoff markers, labels, legend)
-│   ├── export.js              SVG / PNG / clipboard / JSON export
-│   ├── table.js               Excel (.xlsx) and CSV export / import, no libraries
-│   ├── import.js              an Excel workbook -> the app's model
-│   ├── files.js               link the data folder: reload from it and save back to it
-│   ├── node.js                loads the engine in plain Node, no browser
-│   └── app.js                 UI wiring and state
-├── data/
-│   ├── process.data.js        THE VALUE STREAM: phases, teams, activities   <- edit in workshops
-│   ├── taxonomy.data.js       colors, waste categories, activity categories, markers
-│   └── scenario.data.js       scenario attributes (the controls) and presets
-├── test/run-tests.js          node test/run-tests.js - the arithmetic, with no browser
-├── fixture/                   a synthetic workbook with the real schema and real totals
-├── dist/
-│   └── flowline.html                everything above inlined into one file (the release download)
-└── tools/bundle.js            rebuilds dist/ from the folder (node tools/bundle.js)
+## What it does
+
+Every activity carries two numbers you supply: how long it takes now, and your estimate of the minimum if nothing went wrong and nobody waited. Flowline schedules both and draws the difference as a hatched segment on the same bar.
+
+The output is only as good as those estimates. What the tool adds is the scheduling: it follows your dependencies, so a saving on a step running in parallel with a longer one does not shorten anything.
+
+In the sample data above, the current schedule runs 198 days. Using the entered minimums it models 90.5 days, a difference of 107.5 days on the critical path, which is the chain of dependent activities that sets the end date. The same process carries 31 handoffs, 27 of them crossing an organizational boundary. That last number is usually the story.
+
+The metrics panel also reports the sum of time inside activities. That answers a different question: total effort rather than elapsed time. For a purely sequential process the two are equal. The more parallelism, the further apart they drift, and it is worth knowing which one you are quoting.
+
+## Quick start
+
+```bash
+git clone https://github.com/mrobinson2/flowline.git
+cd flowline
+open index.html          # or xdg-open, or drag it into a browser
 ```
 
-## Loading an Excel workbook
+No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Press **Load** and pick the .xlsx. The app looks at the headers, not the file
-name: a sheet carrying `ID`, `Task`, `Current Lead Time (hrs)` and
-`Current Cycle Time (hrs)` is treated as the source workbook and replaces the
-whole data set — activities, teams, phases, the waste taxonomy and the scenario
-switches. Anything else is treated as one of this app's own Activities exports
-and merges into the current data as before.
+For one file you can email or drop on a share:
 
-Three things the import decides, each of which it also tells you about:
-
-**Elapsed time is lead + cycle.** The workbook's Lead Time column is wait-only.
-That is not a guess: Flow Efficiency on the Summary tab equals
-`cycle / (lead + cycle)` to the decimal on every phase, which it can only do if
-lead excludes touch time. A bar's length is therefore lead + cycle. Reading lead
-as total elapsed would report 11.1% flow efficiency where the truth is 10.0%.
-
-**Each distinct "Applies When" phrase becomes an on/off switch.** No rule
-grammar to write by hand: add a phrase in Excel, reload, and a new switch is
-there. They all start on, so the first render is the whole task list.
-
-**Team Topologies Type is used as the organization boundary,** so a
-cross-boundary handoff means Platform → Governance and the like. The Assigned
-Team is still the owner and still what the owner column and filters use.
-
-Values outside a known picklist are kept, counted and listed in the panel —
-never silently dropped. Unknown columns are reported and ignored.
-
-### The Edges sheet
-
-Column order is **Successor ID, then Predecessor ID**. Reading those two the
-other way round reverses every dependency in the graph and produces a schedule
-that looks entirely plausible and is backwards, so the schema pins it
-explicitly. `Zero-Slack Link = BINDING` marks the links that drive the end
-date; those are carried through on `process.bindingLinks` so the chart can draw
-them heavier than the rest.
-
-### The day is eight hours
-
-The Task List carries hours (columns L–O) and the schedule carries days
-(R–X). One hour is 0.125 of a day: every Earliest Finish in the workbook lands
-on an exact eighth (4.63, 6.75, 10.25, 14.13), which is only possible at eight
-hours to the day. `VSM.schema.HOURS_PER_DAY` holds it and a test asserts the
-property still holds on whatever workbook is loaded.
-
-### Two schedules, checked against each other
-
-The workbook computes its own Duration, Earliest Start, Earliest Finish, Latest
-Start, Latest Finish, Slack and Critical Path. This app recomputes all of it,
-because the workbook's figures go stale the moment a scenario switch drops a
-step out of the graph. The workbook's numbers are kept on each activity as
-`source` and compared:
-
-```js
-const rec = VSM.import.reconcile(process, model);
-// { endOurs, endTheirs, checked, mismatchCount, worstDelta,
-//   mismatches[], criticalOurs, criticalTheirs, criticalAgrees }
+```bash
+node tools/bundle.js     # writes dist/flowline.html with everything inlined
 ```
 
-Two independent forward passes over the same graph is the cheapest bug detector
-available to either side. It is sensitive: on the fixture, reversing a single
-dependency moves the end date 10.4 days and flags 146 tasks, mis-setting the
-working day to 7.5 hours moves it 56 days, and a single task 16 hours short
-shows up as exactly one mismatch naming that task.
+## Four views of the same schedule
 
-### Tailoring: profiles and modifiers
+| View | Question it answers |
+|---|---|
+| **Current** | How long does this take today, and what is it waiting on? |
+| **Opportunity** | Where is the removable time, ignoring the work that has to happen? |
+| **Waste / Friction** | Which steps are queues, rework, manual handling or approval drag? |
+| **Optimal** | What would the schedule look like at your minimum durations? |
 
-Three more tabs turn the workbook into a tailoring policy rather than one flat
-task list. They are optional: without them the app falls back to building a
-switch per distinct Applies When phrase.
+![Opportunity view in light theme](docs/images/02-opportunity-light.png)
 
-**Toggles** is the vocabulary, one row per lever: `Toggle ID`, `Group`,
-`Label`, `Type` (boolean or choice), `Options`, `Default`, `Implies`, `Help`.
-Add a row, get a control. `Implies` lets one lever pull another on, so
-requesting an RFP switches on the discovery phase whether or not anyone ticked
-it, and the UI shows that toggle locked with the reason.
+Click any bar for the full detail, including an inline edit form for changing a number live in a meeting. The Waste / Friction view dims value-adding work so the friction stands out.
 
-**Profiles** are named starting points, with one column per toggle. A profile
-**declares a subset and stays silent on the rest**, and a blank cell means
-silence, not off. That is what lets "standard paved-road app, and by the way it
-involves AI" exist without a separate profile for every combination: switching
-profile overwrites only what the profile names, so a modifier it never
-mentioned stays where you put it. Change something the profile *does* declare
-and it is no longer that profile, which the dropdown reflects.
+![Waste view with the details panel open](docs/images/03-waste-details.png)
 
-**Scenario Matrix** is the decision table: `Task ID`, `Task`, `Baseline`, then
-one column per condition. A column header names a condition:
+## Presentation mode
 
-```
-genAI                     the boolean toggle is on
-workType=Greenfield build the choice toggle equals that value
-tier=Tier 0|Tier 1        the choice toggle is any of those
-```
+Press **Presentation** for a fixed 1920x1080 composition: title, scenario summary, metrics strip, timeline, legend. Row height, bar height, fonts and margins are all computed from the row count, so 30 activities get generous bars and 80 still fit one slide without CSS scaling. Text stays vector-crisp.
 
-Cells: blank means the condition has no opinion, `R` means it requires the
-task, `N` means it removes it, and **a number means it requires the task and
-multiplies its duration** by that much. The multiplier matters more than it
-looks: an Architecture Review Board for a catalog pattern is not the review a
-greenfield build pioneering three new services gets, and a model that only adds
-and removes rows understates exactly the projects where the estimate counts.
+![The 1920x1080 presentation composition](docs/images/04-presentation.png)
 
-Resolution: a task is in if Baseline says so or any live condition requires it,
-and out only if nothing live requires it and something live excludes it.
-**Required beats excluded, always, and the collision is reported by name.** A
-governance tool that can silently drop a control because two toggles disagreed
-will eventually embarrass somebody.
+Every export (PNG at 1920x1080 or 3840x2160, SVG, or copy to clipboard) uses this same composition even when you trigger it from the interactive view, so it drops straight into a deck. Above 80 visible rows the toolbar says so, because a truncated chart that does not admit it is a chart that lies.
 
-The order things are switched on never changes the answer. The model is
-recomputed from the whole current state rather than mutated step by step, and a
-test asserts profile-then-modifier equals modifier-then-profile.
+## Reading the chart
 
-**Full scope** is generated, not written: the preset that reaches every step
-any project could need, at unmodified length. Where a step can be reached more
-than one way it picks a route with no multiplier, so the complete map still
-matches the workbook it came from. That is also the only scenario the
-workbook's own CPM columns describe, so it is what reconciliation runs against.
+Nothing relies on color alone. Every family carries a text code, removable time is always hatched, and handoffs and gates have their own shapes.
 
-### When a column name changes
+* **Stacked bar.** Solid segment is the necessary time, hatched segment is the removable time. Total length is the current duration.
+* **Color family** is the kind of activity or the kind of waste, repeated as a code badge on the bar.
+* **Ring at the start of a bar** means the activity receives a handoff, so the owner changed. A filled center dot means it also crosses an organizational boundary. A number beside the ring means several handoffs converge there.
+* **Diamond at the end of a bar** is an approval or decision point. A gate can carry duration of its own, so necessary decision time is separated from queueing and chasing signatures.
+* **Dependency lines** are thin grey, purple where the link is a handoff.
+* **Phase bands** group rows with rotated labels down the left.
+* **Side columns** carry the row number, the responsible team, and `current / optimal / removable`, so a bar too small to read still reports its numbers.
 
-Edit `js/schema.js`. It declares every column, its aliases and its picklist, and
-the importer, the validator and the exporter all read from it. Headers are
-matched with case, spacing and punctuation ignored, so
-`Interaction Mode ("Team Topologies")` also matches `Interaction mode`.
-Columns marked `confirmed: false` are the ones this file is still guessing at;
-`VSM.schema.unconfirmed()` lists them, and so does the end of the test run.
+Rows are focusable, Enter or Space opens the details panel, and every row carries a spoken-word summary for screen readers.
 
-## Running the numbers without a browser
+## Bringing your own data
 
-```
-node test/run-tests.js                          # against the synthetic fixture
-IMPORT_FILE=/path/to/real.xlsx node test/run-tests.js
-```
+### Import a spreadsheet
 
-`js/node.js` loads the engine — registry, units, schema, rules, validate,
-schedule, layout, table, import — under plain Node with no DOM. Only the
-renderer needs a browser. Node 18 or newer; the .xlsx reader uses
-`DecompressionStream`.
+Start with `fixture/sample-value-stream.xlsx` to see the expected columns. Press **Import** and pick an `.xlsx` or `.csv`; Flowline reads the headers, not the file name.
 
-This exists so the arithmetic can be checked from a command line: point it at a
-real workbook and it reports the totals, the values outside the picklists, and
-whether the reduction figure quoted by summed hours differs from the one on the
-critical path. It usually does, and only one of the two belongs on a slide.
+A sheet carrying `ID`, `Task`, `Current Lead Time (hrs)` and `Current Cycle Time (hrs)` is treated as a source workbook and replaces the whole data set: activities, teams, phases, the waste taxonomy and the scenario switches. Anything else merges into the current data as an activities table.
 
-## Editing data during a workshop
+Three things the import assumes about that workbook format, each of which it also reports:
 
-### Link the data folder (the fastest loop)
+* **Elapsed time is lead plus cycle.** Lead Time is read as waiting only, Cycle Time as hands-on work. **If your spreadsheet already includes working time inside Lead Time, fix it before importing or that time is counted twice.**
+* **Each distinct "Applies When" phrase becomes an on/off switch.** Add a phrase in Excel, reload, and a new control appears.
+* **Assigned Team is the owner, Team Topologies Type is the organizational boundary.** Those are data-mapping choices for this workbook, not universal definitions. Change them in `js/schema.js`.
 
-Click **Link data folder** in the sidebar and pick either the app folder or its `data` folder. After that:
+Values outside a known picklist are kept, counted and listed in the panel, never silently dropped. Unknown columns are reported and ignored.
 
-* edit `data/process.data.js` in your editor, save, click **Reload** in the app, and the chart updates
-* or edit in the app (or import a spreadsheet) and click **Save**, and the files on disk are rewritten
+The `.xlsx` reading and writing is done by the app with no libraries. `.xlsx` is zipped XML, and the browser's `DecompressionStream` inflates the parts Excel compresses.
 
-The browser asks for read and write access once; nothing is installed and no server is involved. The link is remembered across page refreshes, and the browser reconfirms permission after a restart. Chrome and Edge support this; Firefox and Safari do not, so those fall back to the **Load** and **Export** buttons, which work everywhere.
+If the workbook carries its own CPM columns, Flowline keeps them and compares them against its own forward pass, listing any differences. Two independent passes over the same graph is a cheap bug detector for both sides.
 
-The file reader tolerates the `/* ... */` comments in the shipped files and a stray trailing comma, and a broken edit is reported with the file and line rather than blanking the chart.
+### Link the data folder
 
+Click **Link data folder** and pick the app folder or its `data` folder. After that, edit `data/process.data.js` in your editor, save, click **Reload**, and the chart updates. Or edit in the app and click **Save** to write the files back. Your browser may ask permission to read and write the folder, and may ask again after a restart. Chrome and Edge support this; Firefox and Safari fall back to Import and Export, which work everywhere.
 
-The three files in `data/` are JSON with a one-line wrapper:
+### Edit the files directly
+
+The three files in `data/` are JSON inside a one-line wrapper:
 
 ```js
 VSM.register("process", {
-  ... plain JSON ...
+  "title": "Application Delivery Value Stream",
+  "units": "business days",
+  "activities": [ ... ]
 });
 ```
 
-Edit anything between the outer braces, save, reload the page. The wrapper exists because browsers refuse `fetch()` of a local file when the page is opened from disk (`file://`), while `<script src>` works everywhere. The same files work unchanged when the folder is hosted as a static site.
+The wrapper exists because browsers refuse `fetch()` of a local file opened from disk, while `<script src>` works everywhere. The same files work unchanged hosted as a static site.
 
-Pure `.json` files also work: use **Load JSON** (or drop a `.json` file on the page). The app accepts a process file (`{"activities": [...]}`), a taxonomy file (`{"families": ...}`), a scenario file (`{"attributes": ...}`) or a bundle `{"process": ..., "taxonomy": ..., "scenario": ...}`. Loaded data is kept in the browser's local storage until you click **Discard loaded JSON**. **Export ▾ → Download data as JSON** writes the current data set out as pure JSON.
+**Import** also takes `.json`, and you can drop any supported file on the page. It accepts a process file, a taxonomy file, a scenario file, or a bundle of all three. Imported data stays in the browser until you press **Discard loaded data**, and **Export ▾ → JSON bundle** writes it back out.
 
-### Excel / CSV round trip (bulk edits)
+## Scenario tailoring
 
-**Export ▾ → Excel workbook (.xlsx)** writes the current scenario's activities to *Task List* (columns A–Y), with dependency, phase-summary, team, chart and scenario information in companion sheets. **CSV (Task List)** writes the same task rows as a single CSV. Exported rows reflect the selected scenario; use the JSON bundle to preserve the complete master data and configuration.
+A value stream is not one process. An off-the-shelf SaaS purchase and a greenfield build pioneering three new services do not go through the same steps, and averaging them describes neither.
 
-Edit in Excel, save, then **Import** the .xlsx or .csv (or drop it on the page). Task List headers route either format through the source importer, replacing the data set after confirmation. CSV carries only the task table; it does not preserve the companion scenario sheets. Legacy *Activities* tables remain supported: their rows update, add, remove and reorder activities, and optional *Teams* and *Phases* sheets replace those lists. Invalid data is rejected before saving. The chart re-renders and valid data is kept in the browser.
+Flowline models that as one **profile** (a saved set of options for a type of work) plus any number of **modifiers** (individual options such as whether it involves AI or regulated data). A profile declares values for some toggles and stays silent on the rest, so switching profile leaves a modifier it never mentioned exactly where you put it.
 
-To make the change permanent, **Export ▾ → Download data/process.data.js** and replace the file in the `data` folder. That file is what the app loads on the next open, on any machine.
+The model is recomputed from the whole current state every time rather than mutated step by step, so profile-then-modifier gives the identical answer to the other order. A test asserts it.
 
-Legacy Activities column notes: `predecessors` and `handoffs` are ids separated by `;`. `when` and `overrides` hold the rule JSON as text (copy them from an existing row). `handoff` and `milestone` are TRUE / FALSE / blank. Durations are numbers. CSV text that could be interpreted as a formula is prefixed with an apostrophe; that protection is retained on reimport.
-
-The workbook is written and read by the app itself with no libraries: .xlsx is zipped XML, and the browser's built-in DecompressionStream inflates the parts Excel compresses (Edge / Chrome 103+, Safari 16.4+, Firefox 113+). CSV works everywhere.
-
-### Editing one activity live
-
-Click an activity, then use the **Edit activity** form at the bottom of the details panel (name, durations, owner, phase, category, waste type, predecessors, notes). **Save changes** re-renders on the spot. Same rule as above: download `process.data.js` afterwards to keep it.
-
-### Activity fields
-
-| field | meaning |
-|---|---|
-| `id` | unique key, referenced by `predecessors` |
-| `name` | label next to the bar |
-| `description`, `notes` | shown in tooltip / details panel |
-| `phase` | groups rows into bands (see `phases`) |
-| `owner` | team id (see `teams`). Owner change between predecessor and activity = handoff |
-| `category` | `value`, `enabling`, or `approval` (gates get a diamond at their decision point) |
-| `waste` | optional waste type id from the taxonomy (drives color family and the code badge) |
-| `duration` | `{ "current": 12, "optimal": 3 }` in the process units (business days) |
-| `predecessors` | finish-to-start dependencies; successors are derived |
-| `when` | inclusion rule (see below); omit for "always" |
-| `overrides` | `[ { "when": {...}, "duration": {...}, "note": "..." } ]`, first match wins |
-| `handoff` | `true` = every incoming link is a handoff, `false` = never |
-| `handoffs` | `["pred-id"]` declare a handoff from specific predecessors (same team, different group) |
-| `milestone` | `true` = diamond only, no bar (use with duration 0) |
-
-If a predecessor is excluded by the scenario, the activity inherits that predecessor's own predecessors, so chains stay intact when a branch is switched off. Redundant links (a predecessor that is already an ancestor of another predecessor) are dropped automatically to keep the chart clean.
-
-### Rules
-
-Write a policy once under `"rules"` in `scenario.data.js`, then reference it by name from any activity:
+Conditions are declarative and can be named once and reused:
 
 ```json
 "rules": {
-  "securityReview": { "securityReview": true },
-  "sensitiveData":  { "dataClassification": { "in": ["confidential", "restricted"] } },
-  "deepSecurity":   { "all": [ "securityReview", "sensitiveData" ] }
+  "sensitiveData": { "dataClassification": { "in": ["confidential", "restricted"] } },
+  "deepSecurity":  { "all": ["securityReview", "sensitiveData"] }
 }
 ```
 
 ```json
-"when": "deepSecurity"
+{ "id": "threat-model", "when": "deepSecurity", "duration": { "current": 4, "optimal": 3 } }
 ```
 
-Change the policy in one place and every activity using it follows. Inline rule objects still work exactly as before; names are shorthand, and the two mix freely (`{ "all": ["cloud", "aiWorkload"] }`).
+Toggles do not only add and remove steps, they change how long a step takes. A Scenario Matrix cell holding a number both requires the task and multiplies its duration, because an architecture review for a catalog pattern is not the review a greenfield build gets.
 
-Rules are evaluated against the scenario values. Grammar:
+Where one toggle requires a step and another excludes it, required wins and the collision is reported by name. A governance tool that can silently drop a control because two toggles disagreed will eventually embarrass somebody.
 
-```json
-{ "hosting": "cloud" }                                       equals
-{ "hosting": "cloud", "aiWorkload": true }                   AND (all keys must match)
-{ "any": [ { "aiWorkload": true }, { "drRequired": true } ] } OR
-{ "not": { "hosting": "cloud" } }                            NOT
-{ "dataClassification": { "in": ["confidential", "restricted"] } }
-{ "integrations": { "includes": "sso" } }                    multi-select contains
-{ "integrations": { "includesAny": ["sso", "sap"] } }
-{ "attr": { "ne": v } }  { "attr": { "gt": n } }             also gte, lt, lte, notIn, includesAll
+## Embedding it elsewhere
+
+`js/embed.js` mounts the chart into any element with no application chrome:
+
+```js
+const chart = VSM.embed.create(document.querySelector("#chart"), {
+  data: { process, taxonomy, scenario },   // omit to use the shipped data
+  profile: "build-paved",
+  view: "current",
+  theme: "dark",
+  onSelect: (activity, node) => console.log(activity.id, node.duration)
+});
+
+chart.update({ view: "waste" });   // redraw; unspecified options keep their value
+chart.setData(next);               // swap the data set, e.g. after an import
+chart.destroy();
 ```
 
-Scenario attributes are defined in `scenario.data.js`; add a new attribute there and it becomes a control immediately. Attribute types are `boolean`, `enum` (single choice) and `multi` (multi-select). `enabledWhen` greys a control out and neutralizes its value when its rule does not match (for example, hardware procurement only applies on-premises).
-
-### Taxonomy
-
-`families` are color pairs (solid "optimal" shade + lighter "excess" shade that is always drawn hatched). `wasteTypes` and `categories` point at a family and carry a short `code` printed on the bar, so a color-blind reader or a black-and-white print still tells a queue (`Q`) from rework (`R`). `waiting: true` on a waste type counts it toward the "waiting time" metric. Add, rename or recolor freely.
+`create()` and `setData()` run the same validation the app uses and throw with the first error rather than leaving you an empty box. `examples/embedded.html` is a working page. The full options and methods reference is in [BACKSTAGE.md](BACKSTAGE.md).
 
 ## Validation
 
-The data is checked before anything is drawn. Errors name the activity and say what to fix:
+Data is checked before anything is drawn, and errors name the activity and say what to fix:
 
 ```
 activity #6 (vendor-rfp) inclusion rule: unknown scenario attribute 'hostng'.
   Without this check the activity would silently never appear.
 activity #8 (vendor-contract): optimal duration (9) is larger than current (2).
-  Optimal is the minimum necessary time, so it cannot exceed today's.
 dependency loop: intake -> sizing -> biz-case -> intake-triage -> intake.
 ```
 
-This matters most for rules. A misspelled attribute or option used to evaluate quietly to false, so the activity just vanished from the chart with nothing to explain it. Now it is reported.
-
-Checks cover duplicate and malformed ids, missing predecessors, dependency loops (including in branches the current scenario excludes), negative or non-numeric durations, optimal above current, unknown category / waste / owner / phase references, unknown rule names and rule loops, bad operators, preset values that are not valid options, and taxonomy colors that are not six-digit hex (SVG and PNG export need a literal color).
+This matters most for rules. A misspelled attribute used to evaluate quietly to false, so the activity just vanished from the chart with nothing to explain it.
 
 When a load fails validation the previous chart stays on screen and the errors are listed in the sidebar, so a typo during a workshop never blanks the projector.
 
-## What the visualization encodes
+## Running the numbers without a browser
 
-* **Stacked bar**: solid segment = optimal / necessary time, hatched lighter segment = excess / removable time. Total length = current duration. Current = optimal + excess.
-* **Color family** = activity kind (value, enabling, approval) or waste type. Code badge on the bar repeats it in text.
-* **Ring at the start of a bar** = the activity receives a handoff (owner changed). Filled center dot = the handoff also crosses an organizational boundary. A number beside the ring = several handoffs converge on that row. Handoffs are detected from `owner`, or declared with `handoff` / `handoffs`.
-* **Diamond at the end of a bar** = approval / decision point. A gate can have duration (its bar still shows optimal vs. excess, so necessary decision time is separated from queueing and bureaucracy) or be a pure milestone (outlined diamond).
-* **Dependency lines**: thin grey; purple when the link is a handoff.
-* **Phase bands** with rotated labels on the left.
-* **Theme**: the Light mode / Dark mode button in the top bar switches the whole app, presentation mode and every export. The choice is remembered.
-* **Side columns**: the row number and responsible team on the left, and `current / optimal / removable` on the right, so a bar too small to read still reports its numbers. On by default while you work and off on slides, where the shape matters more than the detail. Both are checkboxes under Display. Teams can carry a `short` name used when the full label will not fit.
-* **Keyboard**: rows are focusable, Enter or Space opens the details panel, and every row carries a spoken-word summary for screen readers.
-* **Views**: Current (default), Opportunity (necessary time greyed out, excess in color), Waste / Friction (value work dimmed, waste types and handoff rings emphasized), Optimal (the schedule if every activity ran at its optimal duration; activities with optimal 0 shrink to a dashed marker).
-* **Metrics**: current / optimal / removable elapsed (critical path), excess inside activities (sum), handoffs (activities receiving one, cross-org count, distinct org boundaries), approval gates, waiting time. The breakdown bar shows where the removable days sit by family.
+```bash
+node test/run-tests.js                                # arithmetic, against the fixture
+node test/regressions.js                              # security and correctness regressions
+IMPORT_FILE=/path/to/real.xlsx node test/run-tests.js # point it at your own workbook
+ONLY="quadratic" node test/regressions.js             # run one regression group
+```
 
-Labels sit to the left of their bar when there is room, otherwise to the right, otherwise inside a wide bar, otherwise truncated with an ellipsis on the roomier side.
+`js/node.js` loads the whole engine under plain Node with no DOM. Only the renderer needs a browser. Node 18 or newer.
 
-## Presentation mode and export
+Point it at a real workbook and it reports the totals, the values outside the picklists, and how summed activity time compares with the critical path. Every security and correctness fix gets a regression group, each checked to fail before it was checked to pass. See [CHANGELOG.md](CHANGELOG.md).
 
-Above 80 visible rows the toolbar warns that a slide stops being readable; filter or split the scenario for detail slides.
+## Layout
 
-Presentation mode renders a fixed 1920×1080 composition: title, scenario summary, metrics strip, timeline, legend. Row height, bar height, label font, marker size and margins are computed from the number of rows (26 px rows for ~30 activities down to ~9 px rows for 80) so the whole scenario fits one 16:9 slide without CSS scaling; text stays vector-crisp. Exports (PNG at 1920×1080 or 3840×2160, SVG, copy-to-clipboard as PNG) always use this composition, even when triggered from the interactive view, so they drop straight into PowerPoint.
+```
+index.html        the app shell            data/       process, taxonomy, scenario
+css/app.css       application chrome       examples/   embed demo, Backstage plugin
+js/               the engine (see below)   test/       run-tests.js, regressions.js
+tools/bundle.js   builds dist/             fixture/    a synthetic source workbook
+```
 
-## Architecture notes
+Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
 
-* Rendering (`render.js`), scheduling/rules (`schedule.js`, `rules.js`), process data (`data/process.data.js`) and visual taxonomy (`data/taxonomy.data.js`) are separate files with one-way dependencies: data → rules → schedule → layout → render → app.
-* The renderer is a custom SVG timeline rather than Frappe Gantt. Frappe is date-based, mutates its own DOM, and has no concept of stacked segments, gate diamonds, handoff markers, presentation sizing or label placement; wrapping it would have meant fighting it at every step. The custom renderer is ~500 lines, has no dependencies, and the SVG it produces is the export.
-* Hosting later: copy the folder to any static web server (IIS, nginx, Azure Static Web Apps, a storage account). Nothing changes. If the data should come from an API instead, replace the three `<script src="data/...">` lines with a fetch that calls `VSM.register(...)` before `app.js` runs.
-* State (scenario, view, filters, display settings) is kept in local storage so a reload during a workshop lands back on the same scenario. **Reset scenario & settings** clears it.
+`js/schema.js` is the file to edit when a column name changes: it declares every column, its aliases and its picklist, and the importer, validator and exporter all read from it.
 
-## Palette note
+The renderer is a custom SVG timeline rather than a Gantt library. Date-based libraries have no concept of stacked segments, gate diamonds, handoff markers or presentation sizing, so wrapping one meant fighting it at every step. It is about 500 lines with no dependencies, and the SVG it produces is the export.
 
-Twelve color families cannot all be pairwise distinct for every kind of color vision; that is why every family also carries a text code, why excess is always hatched, and why handoffs and gates have their own shapes. Families with similar hues (amber queue vs. orange procurement, indigo testing vs. blue value) remain distinguishable by code and marker. Change the hex values in `taxonomy.data.js` if your brand palette differs.
+## Browser support and data handling
+
+| Feature | Support |
+|---|---|
+| The chart, CSV import, PNG and SVG export | Any current browser |
+| Copy to clipboard as PNG | Needs the clipboard image API; reports an error where it is missing, so use PNG export instead |
+| `.xlsx` import | Chrome/Edge 103+, Safari 16.4+, Firefox 113+ (`DecompressionStream`) |
+| Link data folder | Chrome and Edge (File System Access API) |
+
+The standalone app reads imported files in your browser and does not upload them anywhere. Clipboard export and folder access depend on browser support and permissions.
+
+If you embed Flowline in another application, check that application's security policy and data handling. The bundled `dist/flowline.html` inlines its scripts and styles, and the renderer writes inline style attributes so the exported SVG keeps its appearance, so a host page with a strict Content Security Policy will need to account for that.
+
+## Contributing
+
+Run both suites before opening a pull request. CI runs them on every push along with a check that the standalone build still builds.
+
+```bash
+node test/run-tests.js && node test/regressions.js && node tools/bundle.js
+```
+
+If you are fixing a defect, add a regression group for it in `test/regressions.js` and check that it fails against the code before your fix.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
