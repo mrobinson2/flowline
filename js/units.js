@@ -63,7 +63,12 @@
 
   function resolve(process, opts) {
     const raw = String((process && (process.units || process.unit)) || "business days").toLowerCase();
-    const perDay = (process && Number(process.hoursPerDay)) || HOURS_PER_DAY;
+    /* hoursPerDay sets the gridline spacing, so a zero, a negative or an
+       infinity out of an imported file would make the axis meaningless (and
+       used to make the renderer's tick loop unbounded). Anything that is not a
+       positive finite number falls back to a working day. */
+    const declared = process && Number(process.hoursPerDay);
+    const perDay = isFinite(declared) && declared > 0 ? declared : HOURS_PER_DAY;
     const fmt = (opts && opts.fmt) || (n => String(round1(n)));
 
     if (/hour|hrs?\b/.test(raw)) {

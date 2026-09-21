@@ -35,21 +35,32 @@ VSM.render = (function () {
   }
   function text(parent, x, y, str, attrs) {
     const t = el("text", Object.assign({ x, y }, attrs), parent);
-    t.textContent = str;
+    t.textContent = clip(str);
     return t;
   }
   let renderSeq = 0;
   let ctx = null;
+  /* Labels come out of an imported file and have no length limit there. Nothing
+     wider than the chart can be read anyway, so clip once, here, rather than
+     measuring megabytes of text for every row on every render. */
+  const MAX_LABEL = 512;
+  const clip = s => { s = String(s === null || s === undefined ? "" : s); return s.length > MAX_LABEL ? s.slice(0, MAX_LABEL) : s; };
   function measure(str, size, weight) {
     if (!ctx) ctx = document.createElement("canvas").getContext("2d");
     ctx.font = (weight || 400) + " " + size + "px " + FONT;
-    return ctx.measureText(str).width;
+    return ctx.measureText(clip(str)).width;
   }
+  /* Binary search rather than one character at a time: the old loop measured
+     the string once per character dropped, which is quadratic in the label. */
   function truncate(str, size, maxW, weight) {
+    str = clip(str);
     if (measure(str, size, weight) <= maxW) return str;
-    let s = str;
-    while (s.length > 1 && measure(s + "…", size, weight) > maxW) s = s.slice(0, -1);
-    return s.length > 1 ? s + "…" : "";
+    let lo = 0, hi = str.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (measure(str.slice(0, mid) + "…", size, weight) <= maxW) lo = mid; else hi = mid - 1;
+    }
+    return lo > 1 ? str.slice(0, lo) + "…" : "";
   }
   const fmt = v => { const r = Math.round(v * 10) / 10; return Number.isInteger(r) ? String(r) : r.toFixed(1); };
   const pct = v => Math.round(v * 100) + "%";
@@ -174,16 +185,29 @@ VSM.render = (function () {
     const tickPx = U.tickSize * pxPerDay;
     /* thin the labels out until they stop colliding, then thin the gridlines
        themselves once even those would be closer than three pixels */
-    let labelEvery = tickPx >= 60 ? 1 : tickPx >= 32 ? 2 : tickPx >= 16 ? 4 : tickPx >= 8 ? 8 : tickPx >= 4 ? 20 : 50;
-    const lineEvery = tickPx >= 3 ? 1 : Math.ceil(3 / Math.max(tickPx, 0.01));
-    const ticks = Math.ceil(totalDays / U.tickSize);
+    const labelEvery = tickPx >= 60 ? 1 : tickPx >= 32 ? 2 : tickPx >= 16 ? 4 : tickPx >= 8 ? 8 : tickPx >= 4 ? 20 : 50;
+    const ticks = Math.max(0, Math.ceil(totalDays / U.tickSize));
+    /* The thinning factor is taken from the PIXEL budget, not from tickPx:
+       at extreme totals tickPx underflows and a factor derived from it stops
+       keeping up, which is how 1e18 still hung after the first attempt at
+       this. At three pixels a gridline, a 1200px plot never needs more than
+       ~400 of them however long the timeline claims to be. */
+    const gridBudget = Math.max(1, (chartRight - chartLeft) / 3);
+    const lineEvery = tickPx >= 3 ? 1 : Math.max(1, Math.ceil(ticks / gridBudget));
+    /* STEP BY lineEvery, never by 1. Nothing validates an upper bound on a
+       duration, so a single cell reading 1e12 used to make this loop run once
+       per tick across the whole timeline - hundreds of billions of iterations
+       to draw the same few hundred gridlines, on every rebuild. Stepping by the
+       thinning factor bounds the work by the width of the plot in pixels
+       instead of by the number on the clock. Labels move onto a multiple of
+       that step so every label still sits on a gridline. */
+    const labelStep = Math.ceil(Math.max(labelEvery, 1) / lineEvery) * lineEvery;
     const axisBase = L.chartTop - 6;
     const originW = measure(U.originLabel, L.axisFont);
-    for (let w = 0; w <= ticks; w++) {
+    for (let w = 0; w <= ticks; w += lineEvery) {
       const x = X(w * U.tickSize);
       if (x > chartRight + 0.5) break;
-      const major = w % labelEvery === 0;
-      if (!major && w % lineEvery !== 0) continue;
+      const major = w % labelStep === 0;
       el("line", { x1: x, y1: L.chartTop, x2: x, y2: chartBottom, stroke: major ? T.gridStrong : T.grid, "stroke-width": major ? 0.8 : 0.5, "stroke-dasharray": major ? null : "2 3" }, g);
       /* the first tick label must clear the origin label, whose width depends
          on the unit ("Hour 0" is wider than "Day 0") - so measure it */
@@ -441,7 +465,12 @@ VSM.render = (function () {
     rows.forEach(n => { if (!used.includes(n.family)) used.push(n.family); });
     const items = [];
     items.push({ kind: "key" });
-    used.forEach(f => items.push({ kind: "family", id: f, label: (fams[f] || {}).label || f, fam: fams[f] }));
+    /* A node's family can be the "value" fallback that js/schedule.js assigns
+       when an activity has no category, and the taxonomy need not define it.
+       schedule.js guards familyDef; this used to read fams[f].optimal straight
+       through, so presentation mode and every image export threw. */
+    const FALLBACK_FAM = { optimal: "#64748b", excess: "#94a3b8" };
+    used.forEach(f => items.push({ kind: "family", id: f, label: (fams[f] || {}).label || f, fam: fams[f] || FALLBACK_FAM }));
     const markers = model.taxonomy.markers || {};
     items.push({ kind: "ring", label: (markers.handoff || {}).label || "Handoff" });
     items.push({ kind: "ring-dot", label: (markers.handoffCrossOrg || {}).label || "Handoff across organizations" });
