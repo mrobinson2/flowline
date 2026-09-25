@@ -34,7 +34,9 @@ For one file you can email or drop on a share:
 node tools/bundle.js     # writes dist/flowline.html with everything inlined
 ```
 
-## Four views of the same schedule
+## Five views of the same schedule
+
+A screenshot tour of every view is in [docs/UI-VIEWS.md](docs/UI-VIEWS.md), and of the panels, designer and import/export tools in [docs/UI-TOOLS.md](docs/UI-TOOLS.md).
 
 | View | Question it answers |
 |---|---|
