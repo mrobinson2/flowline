@@ -107,7 +107,7 @@ function appHarness(initial) {
     renderIssues = r => { lastIssues = r; };
     rebuild = () => { model = VSM.schedule.build(data.process, data.taxonomy, {}, {}); };
     init = () => { const ok = loadData(); rebuild(); return ok; };   // mirrors the real init(), which reports whether the data validated
-    VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+    VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, importSheets, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
       loadState, buildScenarioControls, buildEditForm,
       renderWasteChips: () => { rebuild(); renderWasteChips(); } };
   // small public surface`);
@@ -724,6 +724,28 @@ function form(extra = {}) {
     assert.equal(h.api.getData().process.activities[0].id, "A", "the working data must stay on screen");
     assert.equal(h.el("#btn-reset-data").hidden, false, "the discard button stayed hidden");
     assert.match(h.el("#data-source").textContent, /Link a folder or download/, "the panel was not re-described after the refusal");
+  });
+
+  await test("a pasted subset merges into the data instead of replacing it", async () => {
+    /* The paste path reuses the activities import, and that import treats the
+       sheet as the complete list: rows absent from it are REMOVED. Correct
+       for a file; catastrophic for a paste, whose whole point is carrying a
+       few rows out of a bigger sheet. First build routed pastes straight
+       through and a two-row paste deleted the other sixty-seven. */
+    const h = appHarness(dataset([task("A"), task("B", { predecessors: ["A"] }), task("C", { predecessors: ["B"] })]));
+    await h.api.importSheets(
+      { Pasted: [["id", "name", "current", "optimal", "predecessors", "status"], ["B", "B renamed", "16", "4", "A", "done"], ["D", "New from paste", "8", "4", "C", ""]] },
+      { name: "pasted table" }, { merge: true });
+    const acts = h.api.getData().process.activities;
+    assert.equal(acts.length, 4, "a 2-row paste must not shrink a 3-row process");
+    /* compared as JSON: the activities were built inside the VM realm, whose
+       Array prototype fails deepStrictEqual against ours on identical values */
+    assert.equal(JSON.stringify(acts.map(a => a.id)), JSON.stringify(["A", "B", "C", "D"]), "unpasted rows keep their place");
+    assert.equal(acts.find(a => a.id === "B").name, "B renamed", "pasted rows still update");
+    assert.equal(acts.find(a => a.id === "B").status, "done", "tracking columns ride along");
+    /* the false alarm: D referenced C, which was not pasted but exists */
+    const warned = h.messages.some(m => /does not exist/.test(m.message));
+    assert.ok(!warned, "a reference to an existing unpasted row must not warn");
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

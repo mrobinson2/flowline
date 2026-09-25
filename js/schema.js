@@ -139,7 +139,12 @@
     { key: "lfDay",       header: "Latest Finish (day)",                type: "number", confirmed: true, optional: true, aliases: ["Latest Finish", "LF"] },   // V
     { key: "slackDays",   header: "Slack (days)",                       type: "number", confirmed: true, optional: true, aliases: ["Slack", "Float"] },        // W
     { key: "criticalPath", header: "Critical Path",                     type: "text",   confirmed: true, optional: true, aliases: ["Critical", "On Critical Path"] }, // X
-    { key: "notes",       header: "Notes",                              type: "text",   confirmed: true, optional: true, aliases: ["Comments", "Note"] }       // Y
+    { key: "notes",       header: "Notes",                              type: "text",   confirmed: true, optional: true, aliases: ["Comments", "Note"] },      // Y
+    /* The v5 workbook groups its phases into a handful of stages. Matched by
+       header name, so it imports from column B or column Z alike; written
+       after Notes so columns A..Y stay exactly what the source workbook
+       expects. */
+    { key: "stage",       header: "Stage",                              type: "text",   confirmed: false, optional: true, aliases: ["Major Phase", "Stage Name"] } // Z
   ];
 
   /* Edges sheet, confirmed. Note the column order: SUCCESSOR first, then
@@ -154,6 +159,18 @@
     { key: "predEF",    header: "Predecessor Earliest Finish", type: "number", optional: true, confirmed: true, aliases: ["Predecessor EF"] },                   // E
     { key: "succES",    header: "Successor Earliest Start",    type: "number", optional: true, confirmed: true, aliases: ["Successor ES"] },                     // F
     { key: "binding",   header: "Zero-Slack Link",             type: "text",   optional: true, confirmed: true, aliases: ["Zero Slack Link", "Binding"] }        // G
+  ];
+
+  /* Project tracking round-trip: one row per task that carries a status.
+     Written by the Task List export, read back by the importer, and just as
+     happy filled in by hand in Excel. */
+  const TRACKING = [
+    { key: "id",         header: "ID",           type: "text",   required: true, confirmed: false },
+    { key: "name",       header: "Task",         type: "text",   optional: true, confirmed: false },
+    { key: "status",     header: "Status",       type: "text",   optional: true, confirmed: false, aliases: ["State", "Task Status"] },
+    { key: "progress",   header: "Progress %",   type: "number", optional: true, confirmed: false, aliases: ["Progress", "% Complete", "Percent Complete"] },
+    { key: "statusNote", header: "Note",         type: "text",   optional: true, confirmed: false, aliases: ["Status Note", "Blocked Reason", "Comment"] },
+    { key: "statusDate", header: "Updated",      type: "text",   optional: true, confirmed: false, aliases: ["Status Date", "Last Updated", "Date"] }
   ];
 
   /* UNCONFIRMED: assumed to be reduction factors keyed by Lean step type. */
@@ -229,6 +246,7 @@
     topologies:  { name: "Team Topologies View", aliases: ["Team Topologies", "Topologies"],       columns: null },
     scenarios:   { name: "Discovery Scenarios",  aliases: ["Scenarios"],                           columns: null },
     readme:      { name: "Read Me",              aliases: ["Instructions", "Notes"],   columns: null },
+    tracking:    { name: "Tracking",             aliases: ["Status", "Project Tracking", "Task Status"], columns: TRACKING },
     toggles:     { name: "Toggles",              aliases: ["Levers", "Scenario Toggles", "Switches"], columns: TOGGLES },
     profiles:    { name: "Profiles",             aliases: ["Project Profiles", "Scenario Profiles"],  columns: null },
     matrix:      { name: "Scenario Matrix",      aliases: ["Tailoring Matrix", "Matrix", "Applicability Matrix"], columns: null }
@@ -292,7 +310,7 @@
   }
 
   VSM.schema = {
-    TASK, EDGES, ASSUMPTIONS, TOGGLES, PROFILE_FIXED, MATRIX_FIXED,
+    TASK, EDGES, ASSUMPTIONS, TRACKING, TOGGLES, PROFILE_FIXED, MATRIX_FIXED,
     SHEETS, PICKLISTS, HOURS_PER_DAY,
     norm, matchHeaders, matchValue, sheetByName, unconfirmed, parseCondition, parseCell
   };

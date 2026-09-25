@@ -431,7 +431,12 @@
     const phaseOrder = [], phaseById = Object.create(null);
     /* One slugger per namespace, shared with the per-activity lookups below so
        a phase and the activity pointing at it always agree on the id. */
-    const phaseSlug = slugger(), teamSlug = slugger(), condSlug = slugger();
+    const phaseSlug = slugger(), teamSlug = slugger(), condSlug = slugger(), stageSlug = slugger();
+    /* Stages, when the Task List carries a Stage column: the two-level rollup
+       the tracker view segments by. A phase belongs to the first stage it is
+       seen with; a phase that appears under two stages is a data error worth
+       hearing about rather than resolving quietly. */
+    const stageOrder = [], stageById = Object.create(null);
     taskRows.forEach(r => {
       const label = txt(r.phase); if (!label) return;
       const id = phaseSlug(label);
@@ -441,8 +446,19 @@
         phaseById[id] = { id, label: stripped, short: stripped.split(/\s*[&/(]|\s+-\s+/)[0].trim().split(/\s+/).slice(0, 2).join(" "), n: txt(label).match(/^\s*(\d+)/) ? Number(RegExp.$1) : phaseOrder.length + 1 };
         phaseOrder.push(phaseById[id]);
       }
+      const stageLabel = txt(r.stage);
+      if (!stageLabel) return;
+      const sid = stageSlug(stageLabel);
+      if (!stageById[sid]) {
+        const stripped = stageLabel.replace(/^\s*\d+[.)]\s*/, "");
+        stageById[sid] = { id: sid, label: stripped, short: stripped.split(/\s*[&/(]|\s+-\s+/)[0].trim().split(/\s+/).slice(0, 2).join(" ") };
+        stageOrder.push(stageById[sid]);
+      }
+      if (!phaseById[id].stage) phaseById[id].stage = sid;
+      else if (phaseById[id].stage !== sid) report.warnings.push("Phase '" + phaseById[id].label + "' appears under two stages ('" + stageById[phaseById[id].stage].label + "' and '" + stripLead(stageLabel) + "'). The first was kept.");
     });
     phaseOrder.sort((a, b) => a.n - b.n);
+    function stripLead(s) { return String(s).replace(/^\s*\d+[.)]\s*/, ""); }
 
     /* ---- teams; organization boundary = Team Topologies Type */
     const teams = Object.create(null);
@@ -640,6 +656,30 @@
       }
     }
 
+    /* ---- tracking: a Tracking / Status sheet, when the workbook carries one.
+       Status by task ID, so a file exported from the app - or filled in by
+       hand in Excel - brings the project's state back in with it. */
+    if (found.tracking) {
+      const rows = readSheet(found.tracking, S.TRACKING, report, "Tracking");
+      let applied = 0;
+      rows.forEach(r => {
+        const id = txt(r.id);
+        const a = byId.get(id);
+        if (!a) { if (id) report.warnings.push("Tracking row " + r.__row + ": '" + id + "' is not a task ID."); return; }
+        const st = txt(r.status).toLowerCase();
+        if (st) {
+          a.status = st;
+          if (["todo", "doing", "done", "blocked", "skipped"].indexOf(st) < 0) noteUnmapped("Status", txt(r.status), id);
+          applied++;
+        }
+        const pg = num(r.progress);
+        if (pg !== null) a.progress = Math.max(0, Math.min(100, pg));
+        if (txt(r.statusNote)) a.statusNote = txt(r.statusNote);
+        if (txt(r.statusDate)) a.statusDate = txt(r.statusDate);
+      });
+      if (applied) report.notes.push("Tracking sheet: status applied to " + applied + " task" + (applied === 1 ? "" : "s") + ".");
+    }
+
     /* ---- assembled model */
     const process = {
       title: opts.title || "Value Stream",
@@ -652,7 +692,8 @@
       source: opts.source || (found.tasks.name + " sheet"),
       caveat: opts.caveat || "Durations are unvalidated estimates.",
       timeModel: { elapsed: "lead + cycle", solid: "cycle", hatched: "lead", note: "Lead time in this workbook is wait-only; elapsed time is lead + cycle." },
-      phases: phaseOrder.map(p => ({ id: p.id, label: p.label, short: p.short })),
+      stages: stageOrder.length ? stageOrder.map(s => ({ id: s.id, label: s.label, short: s.short })) : undefined,
+      phases: phaseOrder.map(p => ({ id: p.id, label: p.label, short: p.short, stage: p.stage })),
       teams,
       activities,
       assumptions: assumptions || undefined

@@ -24,6 +24,7 @@ require("./schema.js");
 require("./rules.js");
 require("./validate.js");
 require("./schedule.js");
+require("./progress.js");
 require("./layout.js");
 require("./table.js");
 require("./import.js");

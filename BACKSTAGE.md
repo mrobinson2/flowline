@@ -193,7 +193,7 @@ Everything passed to `vsm.embed.create(element, options)`. Every option can also
 | `data` | the shipped sample | `{ process, taxonomy, scenario }`. Validated on the way in. |
 | `profile` | none | A preset id from `scenario.presets`, for example `build-paved`. |
 | `scenario` | `{}` | Toggle overrides laid on top of the profile, for example `{ aiWorkload: true }`. |
-| `view` | `"current"` | `current`, `opportunity`, `waste` or `optimal`. |
+| `view` | `"current"` | `current`, `opportunity`, `waste`, `optimal` or `tracker` (the project-status composition; reads the activities' optional `status` fields). |
 | `theme` | `"dark"` | `dark` or `light`. |
 | `density` | `"normal"` | `comfortable`, `normal` or `compact`. Row height. |
 | `width` | container width | Pixel width. Falls back to `container.clientWidth`, then 1200. |

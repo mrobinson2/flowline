@@ -107,6 +107,31 @@
       model = VSM.schedule.build(data.process, data.taxonomy, scenario, (cfg && cfg.rules) || {}, (cfg && cfg.attributes) || []);
 
       const width = current.width || container.clientWidth || 1200;
+
+      /* the Tracker view has its own renderer and layouts; everything else
+         goes through the timeline renderer as before */
+      if (current.view === "tracker" && VSM.progressRender && VSM.progress) {
+        const track = VSM.progress.compute(model);
+        const next2 = VSM.progressRender.draw(model, track, {
+          layout: current.presentation ? VSM.progressRender.presentation() : VSM.progressRender.interactive(width),
+          theme: current.theme,
+          scenarioSummary: summarise(cfg, scenario)
+        });
+        container.textContent = "";
+        container.appendChild(next2);
+        svg = next2;
+        if (typeof current.onSelect === "function") {
+          svg.querySelectorAll("[data-id]").forEach(el => {
+            el.style.cursor = "pointer";
+            el.addEventListener("click", () => {
+              const n = model.nodeById.get(el.getAttribute("data-id"));
+              if (n) current.onSelect(n.act, n);
+            });
+          });
+        }
+        return model;
+      }
+
       const layout = current.presentation
         ? VSM.layout.presentation(model.nodes.length, { showMetrics: current.metrics !== false, columns: current.columns })
         : VSM.layout.interactive(model.nodes.length, {

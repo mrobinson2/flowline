@@ -22,6 +22,7 @@
     <button type="button" data-view="opportunity" title="Necessary time greyed out; removable time stands out">Opportunity</button>
     <button type="button" data-view="waste" title="Value work de-emphasized; handoffs, gates, queues and rework emphasized">Waste / Friction</button>
     <button type="button" data-view="optimal" title="The schedule if every activity ran at its optimal duration">Optimal</button>
+    <button type="button" data-view="tracker" title="Project status at a glance: % complete, stage-by-stage progress, what's moving, what's blocked, what's left">Tracker</button>
   </nav>
 
   <div class="actions">
@@ -38,6 +39,11 @@
         <hr>
         <button type="button" data-export="xlsx">Excel workbook (.xlsx, Task List format)</button>
         <button type="button" data-export="csv">CSV (Task List, columns A–Y)</button>
+        <hr>
+        <button type="button" data-export="simple" title="The editable format: change it in Excel, then Import it straight back">Editable workbook (.xlsx, Activities format)</button>
+        <button type="button" data-export="simplecsv" title="The editable format as CSV">Editable CSV (Activities format)</button>
+        <button type="button" data-export="template" title="Three example rows showing every column — the fastest way to start a new value stream">Starter template (.xlsx)</button>
+        <hr>
         <button type="button" data-export="json">JSON bundle (process, taxonomy, scenario)</button>
         <button type="button" data-export="datajs">Download data/process.data.js</button>
       </div>
@@ -55,6 +61,12 @@
       <h3>Scenario</h3>
       <select id="preset" class="select"></select>
       <div id="scenario-controls"></div>
+    </section>
+
+    <section>
+      <h3>Process</h3>
+      <button type="button" id="btn-designer" class="ghost small" title="Add, rename and reorder stages and phases, and change the row order — in the app, validated before anything is applied">Open process designer</button>
+      <div class="hint">Stages, phases and row order, edited in place. Durations and dependencies are edited by clicking a row.</div>
     </section>
 
     <section>
@@ -150,8 +162,10 @@
 <script src="js/validate.js"></script>
 <script src="js/rules.js"></script>
 <script src="js/schedule.js"></script>
+<script src="js/progress.js"></script>
 <script src="js/layout.js"></script>
 <script src="js/render.js"></script>
+<script src="js/progress-render.js"></script>
 <script src="js/export.js"></script>
 <script src="js/table.js"></script>
 <script src="js/import.js"></script>
@@ -159,6 +173,7 @@
 <script src="js/export-workbook.js"></script>
 <script src="js/embed.js"></script>
 <script src="js/files.js"></script>
+<script src="js/designer.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

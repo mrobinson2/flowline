@@ -263,11 +263,19 @@ VSM.render = (function () {
     /* ---- rows: bars, markers, badges, labels ---- */
     const handoffFam = (model.taxonomy.families || {}).handoff || { optimal: "#A855F7" };
     const markerLayer = el("g", { class: "vsm-markers" });   // rings stay fully visible in the waste view
+    /* Project tracking, once anyone has recorded a status: a colored tick at
+       the left of the plot and finished work stepped back, so the timeline
+       shows where the project IS without a separate view. Tracking never
+       moves a bar - the glyphs are the only change. */
+    const trackingOn = !!(VSM.progress && model.nodes.some(x => x.act && x.act.status !== undefined));
+    const STATUS_TICK = { done: "#22C55E", doing: "#3B82F6", blocked: "#EF4444", skipped: "#64748B" };
     rows.forEach(n => {
       const G = n.geo, fam = n.familyDef, barH = L.barH, top = G.y - barH / 2;
+      const st = trackingOn ? VSM.progress.statusOf(n.act) : null;
+      const statusDim = st && st.explicit ? (st.id === "done" ? 0.55 : st.id === "skipped" ? 0.35 : 1) : 1;
       const kindLabel = n.wasteDef ? n.wasteDef.label : (n.categoryDef.label || n.category);
       const rowG = el("g", {
-        class: "vsm-row", "data-id": n.id, opacity: n.dim ? 0.3 : 1,
+        class: "vsm-row", "data-id": n.id, opacity: n.dim ? 0.3 : statusDim,
         tabindex: L.mode === "interactive" ? 0 : null,
         role: L.mode === "interactive" ? "button" : null,
         "aria-label": n.name + ". " + n.team.label + ". " + kindLabel + ". "
@@ -350,6 +358,15 @@ VSM.render = (function () {
       // critical path tick
       if (disp.critical && n.critical && !isOptimalView) {
         el("line", { x1: G.x, y1: top + barH + 1.5, x2: G.x2, y2: top + barH + 1.5, stroke: T.critical, "stroke-width": 1, "stroke-opacity": 0.8 }, rowG);
+      }
+
+      // status tick in the gutter between the owner column and the plot
+      if (st && st.explicit) {
+        el("rect", { x: chartLeft - 6, y: top, width: 3, height: barH, rx: 1.5, fill: STATUS_TICK[st.id] || "#64748B" }, rowG);
+        if (st.id === "doing" && st.fraction > 0) {
+          // the finished share of a doing bar, drawn as a thin underline
+          el("line", { x1: G.x, y1: top + barH + 1.5, x2: G.x + (G.x2 - G.x) * st.fraction, y2: top + barH + 1.5, stroke: STATUS_TICK.doing, "stroke-width": 2, "stroke-linecap": "round" }, rowG);
+        }
       }
 
       // label with intelligent placement

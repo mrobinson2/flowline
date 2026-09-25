@@ -32,6 +32,17 @@
      handoffs      ["pred-id"] = declare a handoff only from those predecessors
      milestone     true = draw as a diamond only (usually with duration 0)
      notes         free text for the workshop
+
+   Project tracking (all optional; the Tracker view reads them)
+     status        todo | doing | done | blocked | skipped   (absent = todo)
+     progress      0..100, how far a "doing" activity is (absent = 50)
+     statusNote    free text - why blocked, what's happening
+     statusDate    YYYY-MM-DD of the last status change
+
+   Two-level rollup (optional)
+     stages        [{ id, label, short }] - the executive grouping
+     phases[].stage  the stage a phase rolls up into; the Tracker view draws
+                   one segment per stage when these are set, else per phase
    ========================================================================== */
 VSM.register("process", {
   "title": "Application Delivery Value Stream",
@@ -39,13 +50,20 @@ VSM.register("process", {
   "units": "business days",
   "version": "2026-09-16",
 
+  "stages": [
+    { "id": "define",  "label": "Define",  "short": "Define" },
+    { "id": "source",  "label": "Source",  "short": "Source" },
+    { "id": "deliver", "label": "Deliver", "short": "Deliver" },
+    { "id": "launch",  "label": "Launch",  "short": "Launch" }
+  ],
+
   "phases": [
-    { "id": "intake",    "label": "Intake & Funding",         "short": "Intake" },
-    { "id": "vendor",    "label": "Vendor Onboarding",        "short": "Vendor" },
-    { "id": "design",    "label": "Architecture & Design",    "short": "Design" },
-    { "id": "provision", "label": "Environment Provisioning", "short": "Provision" },
-    { "id": "build",     "label": "Build & Test",             "short": "Build" },
-    { "id": "release",   "label": "Release & Handover",       "short": "Release" }
+    { "id": "intake",    "label": "Intake & Funding",         "short": "Intake",    "stage": "define" },
+    { "id": "vendor",    "label": "Vendor Onboarding",        "short": "Vendor",    "stage": "source" },
+    { "id": "design",    "label": "Architecture & Design",    "short": "Design",    "stage": "deliver" },
+    { "id": "provision", "label": "Environment Provisioning", "short": "Provision", "stage": "deliver" },
+    { "id": "build",     "label": "Build & Test",             "short": "Build",     "stage": "deliver" },
+    { "id": "release",   "label": "Release & Handover",       "short": "Release",   "stage": "launch" }
   ],
 
   "teams": {

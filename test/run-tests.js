@@ -348,7 +348,7 @@ function section(t) { results.push("\n" + t); }
     const fs = require("fs"), path = require("path"), root = path.join(__dirname, "..");
     const BANNED = [/\bGMF\b/i, /GM Financial/i, /\bOKTA\b/i, /\bSRD\b/, /Databricks/i,
                     /\bCCoE\b/i, /Global Architecture Council/i, /\/home\/[a-z]+\//i];
-    const skip = new Set(["dist", "node_modules", ".git", "__pycache__"]);
+    const skip = new Set(["dist", "node_modules", ".git", ".worktrees", "__pycache__"]);
     const hits = [];
     (function walk(dir) {
       fs.readdirSync(dir, { withFileTypes: true }).forEach(e => {
@@ -370,7 +370,10 @@ function section(t) { results.push("\n" + t); }
   const esheets = VSM.exportWorkbook.sheets(em, { scenarioCfg: sd.scenario, scenarioSummary: "test" });
   const taskSheet = esheets.find(s2 => s2.name === "Task List");
   const want = VSM.schema.TASK.map(c => c.header);
-  eq("Task List has all 25 columns", taskSheet.headers.length, 25);
+  /* A..Y from the source workbook, plus the Stage rollup as column Z. The
+     original 25 stay in their exact positions - asserted below - so the
+     source workbook's own tooling still reads the file. */
+  eq("Task List has all 26 columns (A..Y + Stage)", taskSheet.headers.length, 26);
   ok("headers match the schema exactly, in order", JSON.stringify(taskSheet.headers) === JSON.stringify(want),
     JSON.stringify(taskSheet.headers.filter((h, i) => h !== want[i])));
   eq("one row per rendered task", taskSheet.rows.length, em.nodes.length);
@@ -496,7 +499,9 @@ function section(t) { results.push("\n" + t); }
     const task = cs.find(x => x.name === "Task List");
     const chart = cs.find(x => x.name === "Chart View");
 
-    eq("the Task List is still exactly the 25 declared columns", task.headers.length, 25);
+    eq("the Task List is still exactly the declared columns", task.headers.length, VSM.schema.TASK.length);
+    ok("columns A..Y keep their exact positions for the source workbook's tooling",
+      task.headers[0] === "ID" && task.headers[1] === "Phase" && task.headers[24] === "Notes");
     ok("Chart View has a row per drawn row", !!chart && chart.rows.length === cm.nodes.length);
 
     /* the handoff rings: the chart draws them, nothing in A..Y names them */
@@ -583,6 +588,130 @@ function section(t) { results.push("\n" + t); }
     const amp = res.process.activities.slice(0, 40).findIndex(a => /&/.test(a.name));
     return amp < 0 ? true : rows[amp].name === res.process.activities[amp].name;
   })());
+
+  /* ===================================================== 5. project tracking */
+  section("project tracking (the numbers behind the Tracker view)");
+  {
+    const P = VSM.progress;
+    eq("no status reads as not started", P.statusOf({}).id, "todo");
+    ok("no status is not an explicit record", !P.statusOf({}).explicit);
+    eq("doing without a recorded % counts half done", P.statusOf({ status: "doing" }).fraction, 0.5);
+    eq("doing at 80 counts 0.8", P.statusOf({ status: "doing", progress: 80 }).fraction, 0.8, 1e-9);
+    eq("progress clamps at 100", P.statusOf({ status: "doing", progress: 250 }).fraction, 1);
+    eq("a misspelled status is treated as not started", P.statusOf({ status: "donee" }).id, "todo");
+    ok("and reported by name, never silently", P.statusOf({ status: "donee" }).unknown === "donee");
+
+    /* untracked data: the view has to be honest about knowing nothing */
+    const m0 = runP({});
+    const t0 = P.compute(m0);
+    ok("untracked data says so", !t0.tracked);
+    eq("untracked percent is zero", t0.pct, 0);
+    eq("untracked health is not-started", t0.health, "not-started");
+    eq("the shipped data rolls up by stage", t0.level, "stage");
+    ok("every segment carries a label and counts", t0.segments.length > 0 && t0.segments.every(s2 => s2.label && typeof s2.total === "number"));
+    ok("stages that the scenario empties are not drawn", t0.segments.every(s2 => s2.total > 0));
+
+    /* a tracked project */
+    const proc = JSON.parse(JSON.stringify(sd.process));
+    const actById = new Map(proc.activities.map(a => [a.id, a]));
+    ["intake", "intake-triage", "biz-case", "sizing", "kickoff"].forEach(id => { actById.get(id).status = "done"; });
+    actById.get("arch-design").status = "doing"; actById.get("arch-design").progress = 50;
+    actById.get("data-class").status = "blocked"; actById.get("data-class").statusNote = "waiting on the data owner";
+    actById.get("uat").status = "skipped";
+    const m1 = VSM.schedule.build(proc, sd.taxonomy, eff(sBase), sd.scenario.rules, sd.scenario.attributes);
+    const t1 = P.compute(m1);
+    ok("tracked data says so", t1.tracked);
+    ok("percent is between 0 and 1 exclusive", t1.pct > 0 && t1.pct < 1);
+    eq("five activities are done", t1.counts.done, 5);
+    eq("one is in progress", t1.counts.doing, 1);
+    eq("one is blocked", t1.counts.blocked, 1);
+    eq("any blocked task turns the health flag", t1.health, "blocked");
+    ok("a skipped task leaves the denominator", t1.counts.total === m1.nodes.length - 1);
+    ok("the blocked list carries the reason", t1.blocked.length === 1 && /data owner/.test(t1.blocked[0].note));
+    ok("the in-progress list names the activity", t1.now.length === 1 && /architecture/i.test(t1.now[0].name));
+    ok("ready-to-start only lists tasks whose predecessors are finished",
+      t1.next.every(x => m1.nodeById.get(x.id).preds.every(p2 => {
+        const st2 = P.statusOf(m1.nodeById.get(p2).act);
+        return st2.id === "done" || st2.id === "skipped";
+      })));
+
+    /* TRACKING NEVER CHANGES THE SCHEDULE - the rule the design hangs on */
+    eq("status does not move a single bar", m1.metrics.currentElapsed, m0.metrics.currentElapsed);
+    eq("status does not change the task count", m1.nodes.length, m0.nodes.length);
+
+    /* remaining time is a critical path, not a sum */
+    ok("remaining is less than the full path once work is done", t1.remaining < m1.metrics.currentElapsed);
+    ok("remaining is more than zero while work remains", t1.remaining > 0);
+    const allDone = JSON.parse(JSON.stringify(proc));
+    allDone.activities.forEach(a => { a.status = "done"; });
+    const mDone = VSM.schedule.build(allDone, sd.taxonomy, eff(sBase), sd.scenario.rules, sd.scenario.attributes);
+    const tDone = P.compute(mDone);
+    eq("everything done means zero remaining", tDone.remaining, 0);
+    eq("everything done reads complete", tDone.health, "complete");
+    eq("everything done is 100%", tDone.pct, 1);
+    /* a doing task at 0% must cost its whole duration in the remaining path */
+    const half = JSON.parse(JSON.stringify(proc));
+    half.activities.forEach(a => { delete a.status; delete a.progress; });
+    const mAll = VSM.schedule.build(half, sd.taxonomy, eff(sBase), sd.scenario.rules, sd.scenario.attributes);
+    eq("nothing done means the remaining path is the whole path",
+      P.compute(mAll).remaining, mAll.metrics.currentElapsed, 0.01);
+
+    /* the status round-trips through the Activities sheet */
+    const row = VSM.table.activityToRow(actById.get("data-class"));
+    eq("status survives into a row", row.status, "blocked");
+    eq("the note survives too", row.statusnote, "waiting on the data owner");
+    const backAgain = VSM.table.rowsToActivities([row], [actById.get("data-class")]);
+    eq("and reads back", backAgain.activities[0].status, "blocked");
+    eq("with the note intact", backAgain.activities[0].statusNote, "waiting on the data owner");
+    ok("a bad status in a sheet is reported, not dropped", (() => {
+      const r2 = VSM.table.rowsToActivities([Object.assign({}, row, { status: "finished" })], []);
+      return r2.activities[0].status === "finished" && r2.problems.some(p2 => /finished/.test(p2));
+    })());
+
+    /* the Task List export carries a Tracking sheet - only when tracked */
+    const sheetsTracked = VSM.exportWorkbook.sheets(m1, { scenarioCfg: sd.scenario, scenarioSummary: "test" });
+    const trackSheet = sheetsTracked.find(x => x.name === "Tracking");
+    ok("a tracked export writes a Tracking sheet", !!trackSheet);
+    eq("one row per task that carries a status", trackSheet.rows.length, 8);
+    ok("the blocked reason is in the file", trackSheet.rows.some(r2 => /data owner/.test(r2.Note)));
+    ok("an untracked export writes no Tracking sheet",
+      !VSM.exportWorkbook.sheets(m0, { scenarioCfg: sd.scenario, scenarioSummary: "test" }).find(x => x.name === "Tracking"));
+    ok("Tracking is a reserved sheet name the importer knows", VSM.schema.sheetByName("Tracking") === "tracking");
+
+    /* the Stage rollup column and the stages themselves */
+    const stageCol = sheetsTracked.find(x => x.name === "Task List").rows[0].Stage;
+    ok("the Stage column is written from the phase's stage", stageCol === "Define",
+      JSON.stringify(stageCol));
+    ok("shipped phases all map to a stage", sd.process.phases.every(p2 => sd.process.stages.some(s2 => s2.id === p2.stage)));
+
+    /* importing a workbook that carries Stage and Tracking columns */
+    const importSheets = {
+      "Task List": [
+        ["ID", "Stage", "Phase", "Task", "Assigned Team", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Optimized Lead Time (hrs)", "Optimized Cycle Time (hrs)"],
+        ["1", "Stage One", "Phase A", "First", "Team X", "", 8, 4, 4, 4],
+        ["2", "Stage One", "Phase B", "Second", "Team X", "1", 16, 8, 8, 8],
+        ["3", "Stage Two", "Phase C", "Third", "Team Y", "2", 8, 8, 4, 4]
+      ],
+      "Tracking": [
+        ["ID", "Status", "Progress %", "Note"],
+        ["1", "done", "", ""],
+        ["2", "doing", 25, "in flight"],
+        ["9", "done", "", ""]
+      ]
+    };
+    const ir = VSM.import.fromSheets(importSheets, { source: "test" });
+    ok("the import produced no errors", ir.report.errors.length === 0, ir.report.errors.join(" | "));
+    eq("two stages were built from the Stage column", (ir.process.stages || []).length, 2);
+    ok("each phase points at its stage", ir.process.phases.every(p2 => !!p2.stage));
+    eq("the tracking sheet set two statuses", ir.process.activities.filter(a => a.status).length, 2);
+    eq("progress came through", ir.process.activities.find(a => a.id === "2").progress, 25);
+    ok("a tracking row for an unknown task is a warning", ir.report.warnings.some(w => /'9'/.test(w)));
+    const im = VSM.schedule.build(ir.process, ir.taxonomy, {}, {});
+    const it = P.compute(im);
+    eq("the imported project rolls up by stage", it.level, "stage");
+    eq("with both stages as segments", it.segments.length, 2);
+    ok("and a percent that reflects the statuses", it.pct > 0 && it.pct < 1);
+  }
 
   report();
 

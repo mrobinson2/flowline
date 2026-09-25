@@ -1,4 +1,34 @@
-# Flowline 1.0.3
+# Flowline 1.1.0
+
+Prepared 25 September 2026 from 1.0.3. 1.0 answers "how long does this process take and where could time come out?". 1.1 adds "and where is THIS project, right now?" — the same data and chart, plus a status per activity, an executive tracker view, structure editing in the app, and a spreadsheet round trip that includes pasting straight from Excel. The design brief is `docs/DESIGN-1.1.md`.
+
+## Added
+
+### Project tracking
+
+1. **Every activity can carry a status** — `todo`, `doing`, `done`, `blocked` or `skipped` — plus a percent for in-progress work, a note, and the date the status last changed. Set it with one click in the details panel; it persists through the same validated override path as every other edit and lands in every export. Tracking never changes the schedule: the scheduler and the four analysis views do not read status, so ticking a box can never move a bar (a test holds the elapsed figure identical with and without statuses). `js/progress.js` is the rollup arithmetic, pure and Node-tested: percent complete weighted by current duration, counts, per-segment progress, and remaining time computed as the critical path of unfinished work — done and skipped at zero, `doing` at its unfinished share — so the forecast uses the same scheduling rules as the chart. A skipped task leaves the denominator: work ruled out mid-project is not un-done work.
+
+2. **The Tracker view** (`js/progress-render.js`), a fifth view built for one purpose: a CTO understands project state in under thirty seconds. A headline percent with a health pill (in progress / blocked / complete), a segment-per-stage progress bar in the style of a delivery tracker — done segments solid with a check, the active one part-filled, blocked ones flagged red, never color alone — then four panels: what is in progress now and who owns it, what is blocked and why, what is ready to start, and the remaining critical path in human units with gates passed. Presentation mode and every PNG/SVG/clipboard export use a full 1920×1080 composition of the same view. Timeline rows also gain a status tick in the gutter and finished work steps back, so every view shows where the project is once tracking is in use.
+
+3. **Stages above phases.** The process data can declare `stages` and roll each phase up into one (`data/process.data.js` shows the shipped example: four stages over six phases). The tracker segments by stage when stages exist — five or six segments is what an executive reads at a glance; nineteen is what the Gantt is for. The Task List export writes the rollup as a `Stage` column, placed after `Notes` so columns A..Y keep their exact positions for the source workbook's own tooling, and the importer reads a `Stage` column back into stages wherever it appears.
+
+### Editing the structure in the app
+
+4. **A process designer** (`js/designer.js`): stages, phases and row order edited in an overlay — add, rename, reorder and delete stages and phases, assign phases to stages, move activities between phases, reorder rows, and sort all rows into band order in one click. Every change happens on a working copy and applies only when the whole candidate validates, the same last-good-data contract imports honour; deleting a phase that still has activities moves them to the first remaining phase and says so, never orphans them silently.
+
+### The spreadsheet round trip
+
+5. **Paste from Excel.** Copy rows in Excel or Google Sheets, click the page, paste. Tab-separated clipboard text with a header row goes through the same pipeline and preview as a dropped file. Pasted rows **merge** — update and add, never remove — because the whole point of a paste is carrying a few rows out of a bigger sheet, and the first build's file semantics (the sheet is the complete list) would have deleted everything not pasted. A regression group holds that, checked to fail against the file-semantics routing before it was checked to pass.
+
+6. **A real import preview** replaces the `confirm()` wall of text: what changes, the warnings, Apply / Cancel. Hosts without `document.body` (the Node test VM) fall back to `confirm`, so the tests keep running the real handlers.
+
+7. **The editable formats are in the Export menu**: the Activities workbook and CSV — the format Import accepts straight back — and a starter template with three example rows showing every column, for starting a value stream from nothing. The Activities sheet gains `status` / `progress` / `statusnote` / `statusdate` columns, and the Task List export gains a `Tracking` sheet (written only when someone has recorded a status), which the importer reads back by task ID — so status set in the app survives a round trip through Excel, and status typed into Excel comes in with the import.
+
+## Fixed
+
+8. **Loading data with a different toggle vocabulary kept the old answers.** `applyLoadedData()` left `state.scenario` untouched, so after loading a folder or workbook whose scenario declares different attributes, the summary line read "undefined" and the rules evaluated against values that no longer exist. The state now keeps every choice that still applies, defaults the rest, drops the orphans, and clears a selected profile the new data does not declare.
+
+9. **The source-tree scan walked into `.worktrees/`** and failed on checkouts carrying a git worktree; it now skips that directory like `.git` and `node_modules`.
 
 Prepared 20 September 2026 from 1.0.2. Fixes seventeen findings from a review of 1.0.2, including two that 1.0.2 introduced while fixing something else. Nothing has been published remotely.
 

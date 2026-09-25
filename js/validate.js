@@ -230,14 +230,24 @@ VSM.validate = (function () {
       });
     });
 
-    /* ---------------------------------------------------- teams and phases */
+    /* ---------------------------------------------------- teams, stages, phases */
     const teams = process.teams || {}, phases = process.phases || [];
     Object.entries(teams).forEach(([id, t]) => { if (!t || typeof t.label !== "string") err("team '" + id + "': needs a label."); });
+    if (process.stages !== undefined && !Array.isArray(process.stages)) err("process data: stages must be an array.");
+    const stageIds = new Set();
+    (Array.isArray(process.stages) ? process.stages : []).forEach(s => {
+      if (!s || !s.id) { err("stage: every stage needs an id."); return; }
+      if (stageIds.has(s.id)) err("stage '" + s.id + "': duplicate id.");
+      stageIds.add(s.id);
+    });
     const phaseIds = new Set();
     phases.forEach(p => {
       if (!p || !p.id) { err("phase: every phase needs an id."); return; }
       if (phaseIds.has(p.id)) err("phase '" + p.id + "': duplicate id.");
       phaseIds.add(p.id);
+      /* a mistyped stage reference silently drops the phase out of the tracker
+         bar, so it gets the same treatment as a mistyped phase on an activity */
+      if (p.stage && !stageIds.has(p.stage)) warn("phase '" + p.id + "': stage '" + p.stage + "' is not in the stages list, so the tracker will not roll this phase into a stage.");
     });
 
     /* ---------------------------------------------------- activities */
@@ -259,6 +269,15 @@ VSM.validate = (function () {
       if (a.waste && !has(wastes, a.waste)) err(at + ": unknown waste type '" + a.waste + "'. Valid: " + Object.keys(wastes).join(", ") + ".");
       if (a.owner && !has(teams, a.owner)) err(at + ": unknown owner '" + a.owner + "'. Add it to \"teams\" or fix the id.");
       if (a.phase && !phaseIds.has(a.phase)) warn(at + ": phase '" + a.phase + "' is not in the phases list, so the row will not sit under a phase band.");
+      /* Tracking fields. Warnings, not errors: a typo in a status out of a
+         spreadsheet should never blank a chart, so the row renders as not
+         started and the sidebar says why the tracker disagrees with Excel. */
+      if (a.status !== undefined && !["todo", "doing", "done", "blocked", "skipped"].includes(String(a.status).trim().toLowerCase())) {
+        warn(at + ": unknown status '" + a.status + "'. Valid: todo, doing, done, blocked, skipped. Treated as not started.");
+      }
+      if (a.progress !== undefined && (typeof a.progress !== "number" || !isFinite(a.progress) || a.progress < 0 || a.progress > 100)) {
+        warn(at + ": progress must be a number from 0 to 100. Treated as 50.");
+      }
       if (a.predecessors !== undefined && !Array.isArray(a.predecessors)) err(at + ": predecessors must be an array of activity ids.");
       if (a.handoffs !== undefined && !Array.isArray(a.handoffs)) err(at + ": handoffs must be an array of predecessor ids.");
       if (a.when !== undefined) checkRule(a.when, at + " inclusion rule", []);

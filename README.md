@@ -42,12 +42,33 @@ node tools/bundle.js     # writes dist/flowline.html with everything inlined
 | **Opportunity** | Where is the removable time, ignoring the work that has to happen? |
 | **Waste / Friction** | Which steps are queues, rework, manual handling or approval drag? |
 | **Optimal** | What would the schedule look like at your minimum durations? |
+| **Tracker** | Where is this project right now, what is stuck, and how much is left? |
 
 ![Opportunity view in light theme](docs/images/02-opportunity-light.png)
 
 Click any bar for the full detail, including an inline edit form for changing a number live in a meeting. The Waste / Friction view dims value-adding work so the friction stands out.
 
 ![Waste view with the details panel open](docs/images/03-waste-details.png)
+
+## Tracking a live project
+
+The first four views analyze a process. The fifth follows a project through it. Click any activity and set its status — not started, in progress (with a percent), done, blocked (with a reason), or skipped — and the **Tracker** view becomes a status readout built to be understood from the back of a boardroom in under thirty seconds:
+
+![The tracker view](docs/images/05-tracker-dark.png)
+
+* The headline percent is weighted by current duration, so it measures the plan you are actually executing, with the plain count beside it because both get asked for in the same meeting.
+* The progress bar has one segment per **stage** — an optional rollup above phases (`"stages"` in the process data, one `"stage"` per phase). Done segments are solid with a check, the active one part-fills, blocked ones are flagged red, and none of it relies on color alone. Without stages it segments by phase.
+* The panels answer the four follow-up questions: what is moving and who owns it, what is blocked and why, what is ready to start, and what remains — computed as the **critical path of unfinished work** (done and skipped cost zero, in-progress its unfinished share), so the forecast follows the same dependency rules as the chart, translated into weeks or months a director thinks in.
+
+Three rules keep it honest. Tracking never changes the schedule — a test holds the elapsed time identical with and without statuses. A skipped task leaves the denominator, because work ruled out mid-project is not un-done work. And a misspelled status out of a spreadsheet is reported and shown as not started, never silently dropped.
+
+Status survives the spreadsheet round trip: the Activities format carries `status` / `progress` columns, the Task List export adds a `Tracking` sheet when anything is tracked, and the importer reads either back by task ID. Track in the app and the exported workbook answers "what's our status" on its own; fill status in Excel and it comes in with the import.
+
+The timeline views join in once tracking is in use: done rows step back with a green tick, in-progress rows carry a blue tick and a thin underline showing the finished share, blocked rows a red tick.
+
+## Editing the structure in the app
+
+**Open process designer** (in the sidebar) edits what used to need a text editor: add, rename, reorder and delete stages and phases, assign phases to stages, move activities between phases, reorder rows, and sort every row into band order in one click. Changes happen on a working copy and apply only when the whole result validates — the same last-good-data contract as imports, so a half-finished edit can never blank the projector. Deleting a phase that still has activities moves them to the first remaining phase and says so.
 
 ## Presentation mode
 
@@ -75,7 +96,11 @@ Rows are focusable, Enter or Space opens the details panel, and every row carrie
 
 ### Import a spreadsheet
 
-Start with `fixture/sample-value-stream.xlsx` to see the expected columns. Press **Import** and pick an `.xlsx` or `.csv`; Flowline reads the headers, not the file name.
+Start with `fixture/sample-value-stream.xlsx` to see the expected columns, or **Export ▾ → Starter template** for a three-row workbook that shows every field in use. Press **Import** and pick an `.xlsx` or `.csv`; Flowline reads the headers, not the file name.
+
+Or skip the file entirely: **copy rows in Excel or Google Sheets and paste them onto the page.** A pasted table with a header row goes through the same preview as a dropped file, with one deliberate difference — pasted rows update and add but never remove, because the point of a paste is carrying a few rows out of a bigger sheet, and treating that as the complete list would delete everything you did not paste. An imported *file* is still authoritative: its rows are updated, added and removed to match.
+
+**Export ▾ → Editable workbook** writes the same Activities format back out — change it in Excel, import it straight back, round trip complete.
 
 A sheet carrying `ID`, `Task`, `Current Lead Time (hrs)` and `Current Cycle Time (hrs)` is treated as a source workbook and replaces the whole data set: activities, teams, phases, the waste taxonomy and the scenario switches. Anything else merges into the current data as an activities table.
 
@@ -193,7 +218,7 @@ js/               the engine (see below)   test/       run-tests.js, regressions
 tools/bundle.js   builds dist/             fixture/    a synthetic source workbook
 ```
 
-Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
+Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `progress` computing the tracking rollups over a scheduled model, `progress-render` drawing the Tracker view, `designer` editing stages, phases and row order, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
 
 `js/schema.js` is the file to edit when a column name changes: it declares every column, its aliases and its picklist, and the importer, validator and exporter all read from it.
 

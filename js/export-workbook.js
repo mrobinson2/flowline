@@ -93,6 +93,12 @@
       const p = ((model.process && model.process.phases) || []).find(x => x.id === id);
       return p ? p.label : (id || "");
     };
+    const stageLabel = phaseId => {
+      const p = ((model.process && model.process.phases) || []).find(x => x.id === phaseId);
+      if (!p || !p.stage) return "";
+      const s = ((model.process && model.process.stages) || []).find(x => x.id === p.stage);
+      return s ? s.label : p.stage;
+    };
 
     return model.nodes.map(n => {
       const a = n.act || {};
@@ -144,7 +150,9 @@
            concludes the tool is wrong. */
         "Notes": [txt(a.notes), f !== 1 ? "Scenario multiplier " + f + "x applied" +
           ((a.multipliers || []).length ? " (" + a.multipliers.map(x => x.note).join("; ") + ")" : "") : ""]
-          .filter(Boolean).join(" | ")
+          .filter(Boolean).join(" | "),
+        /* column Z: the two-level rollup, blank when the data has no stages */
+        "Stage": stageLabel(a.phase)
       };
     });
   }
@@ -207,7 +215,7 @@
     const EDGE_HEADERS = VSM.schema.EDGES.map(c => c.header);
     const out = [
       { name: "Task List", headers: TASK_HEADERS, rows: taskRows(model, opts),
-        widths: [6, 30, 44, 26, 24, 26, 16, 30, 22, 16, 30, 12, 12, 12, 12, 9, 12, 12, 12, 12, 12, 12, 10, 11, 30] },
+        widths: [6, 30, 44, 26, 24, 26, 16, 30, 22, 16, 30, 12, 12, 12, 12, 9, 12, 12, 12, 12, 12, 12, 10, 11, 30, 24] },
       { name: "Edges", headers: EDGE_HEADERS, rows: edgeRows(model), widths: [12, 13, 44, 44, 14, 14, 13] },
       { name: "Summary by Phase",
         headers: ["Phase", "Steps", "Approval Gates", "Handoffs", "Rework Loops", "Current Lead (hrs)", "Current Cycle (hrs)",
@@ -278,6 +286,27 @@
       name: "Chart View", headers: Object.keys(chartRows[0] || { Row: "" }), rows: chartRows,
       widths: [6, 10, 44, 20, 26, 9, 15, 18, 20, 30, 7, 10, 15, 13, 11, 11, 16]
     });
+
+    /* TRACKING. Written only when someone has actually recorded a status, so
+       an untracked export carries no sheet of 150 blank rows. Round-trips: the
+       importer reads this sheet back by ID, and it is equally fine filled in
+       by hand in Excel. */
+    const trackedNodes = model.nodes.filter(n => n.act && n.act.status !== undefined);
+    if (trackedNodes.length) {
+      out.push({
+        name: "Tracking", headers: VSM.schema.TRACKING.map(c => c.header), widths: [10, 44, 12, 12, 40, 12],
+        rows: trackedNodes.map(n => {
+          const a = n.act;
+          return {
+            "ID": a.id, "Task": n.name,
+            "Status": txt(a.status),
+            "Progress %": a.progress === undefined || a.progress === null ? "" : a.progress,
+            "Note": txt(a.statusNote),
+            "Updated": txt(a.statusDate)
+          };
+        })
+      });
+    }
 
     /* the tailoring tabs, written from whatever the scenario config holds */
     const cfg = opts.scenarioCfg;

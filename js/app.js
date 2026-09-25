@@ -28,6 +28,7 @@
   let data = null;       // { process, taxonomy, scenario }
   let state = null;      // persisted UI state
   let model = null;      // scheduled model
+  let track = null;      // progress rollup for the tracker view (VSM.progress.compute)
   let svg = null;        // interactive svg
   let presentSvg = null; // presentation svg
   let selectedId = null;
@@ -213,6 +214,11 @@
       toast("The schedule could not be built: " + e.message, true);
       return;
     }
+    /* The tracking rollup rides on the scheduled model and never changes it.
+       Computed once per rebuild so the tracker view, the row glyphs and the
+       status panel all agree. */
+    track = VSM.progress.compute(model);
+    model.warnings = model.warnings.concat(track.warnings);
     renderWarnings();
     renderMetrics();
     renderWasteChips();
@@ -225,8 +231,12 @@
   function renderChart() {
     const wrap = $("#chart-wrap");
     const width = Math.max(wrap.clientWidth - 8, 600);
-    const L = VSM.layout.interactive(model.nodes.length, { width, zoom: state.display.zoom, density: state.display.density, columns: state.display.columns });
-    svg = VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });
+    if (state.view === "tracker") {
+      svg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.interactive(width), theme: state.theme, scenarioSummary: scenarioSummary() });
+    } else {
+      const L = VSM.layout.interactive(model.nodes.length, { width, zoom: state.display.zoom, density: state.display.density, columns: state.display.columns });
+      svg = VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });
+    }
     const chart = $("#chart");
     chart.innerHTML = "";
     chart.appendChild(svg);
@@ -234,6 +244,15 @@
   }
 
   function renderPresentation() {
+    if (state.view === "tracker") {
+      presentSvg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), theme: state.theme, scenarioSummary: scenarioSummary() });
+      const stage = $("#present-stage");
+      stage.innerHTML = "";
+      stage.appendChild(presentSvg);
+      $("#present-rows").textContent = "Project tracker · " + Math.round(track.pct * 100) + "% complete · " + track.counts.done + "/" + track.counts.total + " done";
+      $("#present-rows").classList.toggle("warn", false);
+      return;
+    }
     const L = VSM.layout.presentation(model.nodes.length, { showMetrics: state.display.presentMetrics, columns: state.display.presentColumns });
     presentSvg = VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });
     const stage = $("#present-stage");
@@ -543,6 +562,7 @@
       h("span", { class: "tt-code", style: "background:" + safeColor(n.familyDef.optimal) }, n.code),
       h("h2", null, n.name),
       h("button", { class: "icon", type: "button", title: "Close", onclick: () => { panel.hidden = true; selectedId = null; highlightSelected(); } }, "×")));
+    panel.appendChild(buildStatusControl(a));
     const dl = h("dl");
     const add = (k, v) => { if (v === null || v === undefined || v === "") return; dl.appendChild(h("dt", null, k)); dl.appendChild(h("dd", null, v)); };
     add("ID", a.id);
@@ -551,6 +571,8 @@
     add("Phase", ((data.process.phases || []).find(p => p.id === a.phase) || {}).label || a.phase);
     add("Category", (n.categoryDef.label || n.category) + (n.isGate ? " (gate)" : ""));
     add("Waste type", n.wasteDef ? n.wasteDef.label + " — " + (n.wasteDef.description || "") : "none");
+    const stRow = VSM.progress.statusOf(a);
+    if (stRow.explicit) add("Status", (VSM.progress.STATUSES.find(s => s.id === stRow.id) || {}).label + (stRow.id === "doing" ? " (" + Math.round(stRow.fraction * 100) + "%)" : "") + (stRow.note ? " — " + stRow.note : ""));
     const un = data.process.units || "business days", ab = units().abbr;
     add("Current duration", fmt(d.current) + " " + un + "  (" + fmt(n.cur.start) + " → " + fmt(n.cur.end) + ")");
     if (a.time) add("Lead / cycle", fmt(a.time.leadCurrent) + " " + ab + " waiting + " + fmt(a.time.cycleCurrent) + " " + ab + " hands-on  ·  flow efficiency " + pct(d.current ? a.time.cycleCurrent / d.current : 0));
@@ -568,6 +590,56 @@
     panel.appendChild(buildEditForm(a));
     panel.appendChild(h("pre", { class: "json" }, JSON.stringify(a, null, 2)));
     panel.hidden = false;
+  }
+
+  /* Project tracking for one activity: one click sets the status, the slider
+     sets how far along a doing activity is, the note says why it is blocked.
+     Applied immediately through the same validated override path as every
+     other edit - tracking state lands in exports and the linked folder. */
+  function buildStatusControl(a) {
+    const st = VSM.progress.statusOf(a);
+    const box = h("div", { class: "status-box" });
+    box.appendChild(h("div", { class: "control-group" }, "Tracking"));
+    const seg = h("div", { class: "segmented status-seg" });
+    VSM.progress.STATUSES.forEach(s => {
+      const on = st.id === s.id && st.explicit;
+      const b = h("button", { type: "button", class: on ? "on" : "", title: s.label }, s.short);
+      b.onclick = () => applyStatus(a.id, { status: on ? null : s.id });   // click again to clear
+      seg.appendChild(b);
+    });
+    box.appendChild(seg);
+    if (st.explicit && st.id === "doing") {
+      const slider = h("input", { type: "range", min: "0", max: "100", step: "5" });
+      slider.value = String(Math.round(st.fraction * 100));
+      const val = h("b", null, Math.round(st.fraction * 100) + "%");
+      slider.oninput = () => { val.textContent = slider.value + "%"; };
+      slider.onchange = () => applyStatus(a.id, { progress: Number(slider.value) });
+      box.appendChild(h("label", { class: "field" }, h("span", null, "Progress ", val), slider));
+    }
+    if (st.explicit) {
+      const note = h("input", { class: "input", placeholder: st.id === "blocked" ? "Why is it blocked?" : "Status note (optional)", value: st.note });
+      note.onchange = () => applyStatus(a.id, { statusNote: note.value.trim() || null });
+      box.appendChild(note);
+      if (st.date) box.appendChild(h("div", { class: "hint" }, "Status set " + st.date));
+    } else {
+      box.appendChild(h("div", { class: "hint" }, "No status recorded. Setting one turns the Tracker view into a live project readout."));
+    }
+    return box;
+  }
+  function applyStatus(id, patch) {
+    const candidate = VSM.deepClone(data.process);
+    const act = candidate.activities.find(x => x.id === id);
+    if (!act) return;
+    if (patch.status !== undefined) {
+      if (patch.status === null) { delete act.status; delete act.progress; delete act.statusNote; delete act.statusDate; }
+      else { act.status = patch.status; act.statusDate = new Date().toISOString().slice(0, 10); }
+    }
+    if (patch.progress !== undefined) { act.progress = patch.progress; act.statusDate = new Date().toISOString().slice(0, 10); }
+    if (patch.statusNote !== undefined) { if (patch.statusNote) act.statusNote = patch.statusNote; else delete act.statusNote; }
+    try { saveProcessOverride(candidate, "edited"); }
+    catch (e) { toast("Status not saved: " + e.message, true); return; }
+    data.process = candidate;
+    rebuild();
   }
 
   /* Inline editing of one activity (for the "change one number live in the meeting" case). */
@@ -672,6 +744,9 @@
     const presenting = document.body.classList.contains("presenting");
     if (!presenting) {
       // exports always use the 16:9 presentation composition
+      if (state.view === "tracker") {
+        return VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), theme: state.theme, scenarioSummary: scenarioSummary() });
+      }
       const L = VSM.layout.presentation(model.nodes.length, { showMetrics: state.display.presentMetrics, columns: state.display.presentColumns });
       return VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });
     }
@@ -681,6 +756,46 @@
     const t = $("#toast");
     t.textContent = msg; t.classList.toggle("error", !!isError); t.hidden = false;
     clearTimeout(t._timer); t._timer = setTimeout(() => { t.hidden = true; }, 3200);
+  }
+
+  /* A real preview dialog instead of confirm()'s wall of text: the summary
+     lines as a list, warnings marked, Apply / Cancel. Headless hosts (the
+     Node test VM, odd embeds) have no document.body, and there the native
+     confirm keeps the same handlers runnable unchanged. */
+  function ask(lines, applyLabel) {
+    if (!document.body) return Promise.resolve(confirm(lines.join("\n")));
+    return new Promise(resolve => {
+      const done = v => { overlay.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+      const onKey = e => { if (e.key === "Escape") done(false); };
+      document.addEventListener("keydown", onKey);
+      const overlay = h("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
+      overlay.addEventListener("click", e => { if (e.target === overlay) done(false); });
+      const body = h("div", { class: "overlay-body" });
+      let list = null;
+      lines.forEach((ln, i) => {
+        const s = String(ln === null || ln === undefined ? "" : ln);
+        if (i === 0) return;                                   // the title
+        if (!s.trim()) { list = null; return; }                // blank = paragraph break
+        if (/^[•·]\s/.test(s)) {
+          if (!list) { list = h("ul"); body.appendChild(list); }
+          list.appendChild(h("li", { class: /warning|error|not a number|does not exist|duplicate/i.test(s) ? "warn" : "" }, s.replace(/^[•·]\s/, "")));
+          return;
+        }
+        list = null;
+        body.appendChild(h("p", { class: /^warnings?\s*\(/i.test(s) ? "warn-head" : "" }, s));
+      });
+      overlay.appendChild(h("div", { class: "overlay-box" },
+        h("div", { class: "overlay-head" },
+          h("h2", null, String(lines[0] || "Confirm")),
+          h("button", { class: "icon", type: "button", title: "Cancel", onclick: () => done(false) }, "×")),
+        body,
+        h("div", { class: "overlay-foot" },
+          h("button", { class: "ghost", type: "button", onclick: () => done(false) }, "Cancel"),
+          h("button", { class: "primary", type: "button", onclick: () => done(true) }, applyLabel || "Apply"))));
+      document.body.appendChild(overlay);
+      const b = overlay.querySelector(".primary");
+      if (b) b.focus();
+    });
   }
   async function doExport(kind) {
     const name = slug(data.process.title) + "-" + state.view;
@@ -692,12 +807,37 @@
       else if (kind === "json") { VSM.exporter.exportJSON({ process: data.process, taxonomy: data.taxonomy, scenario: data.scenario }, slug(data.process.title) + ".json"); toast("JSON exported"); }
       else if (kind === "xlsx") { VSM.exportWorkbook.exportXLSX(model, exportOpts(), slug(data.process.title) + "-value-stream.xlsx"); toast("Excel workbook exported in the Task List format"); }
       else if (kind === "csv") { VSM.exportWorkbook.exportCSV(model, exportOpts(), slug(data.process.title) + "-task-list.csv"); toast("CSV exported in the Task List format"); }
+      else if (kind === "simple") { VSM.table.exportXLSX(data.process, slug(data.process.title) + "-activities.xlsx"); toast("Editable workbook exported — change it in Excel and Import it straight back"); }
+      else if (kind === "simplecsv") { VSM.table.exportCSV(data.process, slug(data.process.title) + "-activities.csv"); toast("Editable CSV exported — change it and Import it straight back"); }
+      else if (kind === "template") { VSM.table.exportXLSX(starterTemplate(), "flowline-starter-template.xlsx"); toast("Starter template exported — fill in the Activities sheet and Import it"); }
       else if (kind === "datajs") { VSM.exporter.download(new Blob([processDataJS(data.process)], { type: "text/javascript" }), "process.data.js"); toast("process.data.js downloaded: replace the copy in the data folder"); }
     } catch (e) { toast("Export failed: " + e.message, true); }
   }
   /* What the exporter needs to name the scenario and write the tailoring tabs. */
   function exportOpts() {
     return { scenarioCfg: data.scenario, scenarioSummary: scenarioSummary() };
+  }
+  /* Three example rows that show every column in use, for starting a value
+     stream from a blank sheet. The Columns tab in the workbook explains each
+     field; these rows show the shape (a dependency, a rule, a status). */
+  function starterTemplate() {
+    return {
+      title: "My Value Stream",
+      units: "business days",
+      phases: [{ id: "plan", label: "Plan" }, { id: "build", label: "Build" }, { id: "run", label: "Run" }],
+      teams: { "team-a": { label: "Team A", org: "Org 1" }, "team-b": { label: "Team B", org: "Org 2" } },
+      activities: [
+        { id: "step-1", name: "First step", phase: "plan", owner: "team-a", category: "value",
+          duration: { current: 5, optimal: 2 }, predecessors: [], status: "done",
+          description: "Replace these three rows with your process. id must be unique; predecessors reference ids." },
+        { id: "step-2", name: "Approval gate example", phase: "plan", owner: "team-b", category: "approval",
+          duration: { current: 3, optimal: 1 }, predecessors: ["step-1"], status: "doing", progress: 50,
+          description: "category approval draws the decision diamond. The owner change from Team A is detected as a handoff." },
+        { id: "step-3", name: "Build step example", phase: "build", owner: "team-a", category: "value",
+          duration: { current: 10, optimal: 8 }, predecessors: ["step-2"],
+          description: "Leave status blank until the work starts; the Tracker view fills in as statuses are set." }
+      ]
+    };
   }
   function processDataJS(process) {
     return "/* PROCESS DATA (the value stream). Plain JSON inside the VSM.register wrapper.\n" +
@@ -748,7 +888,7 @@
       lines.push("", "Warnings (" + r.report.warnings.length + "):",
         ...r.report.warnings.slice(0, 8).map(w => "• " + w), r.report.warnings.length > 8 ? "…" : "");
     }
-    if (!confirm(lines.join("\n"))) { toast("Import cancelled"); return; }
+    if (!await ask(lines, "Import")) { toast("Import cancelled"); return; }
 
     const override = readOverride();
     override.process = r.process; override.taxonomy = r.taxonomy; override.scenario = r.scenario;
@@ -768,15 +908,49 @@
         } else sheets = { "Task List": VSM.table.parseCSV(await file.text()) };
       }
       catch (e) { toast("Could not read " + file.name + ": " + e.message, true); return; }
-      if (looksLikeSourceWorkbook(sheets)) return loadSourceWorkbook(file, sheets);
     }
+    return importSheets(sheets, file);
+  }
+  /* One routing point for parsed sheets, whether they came from a file or
+     from the clipboard: source workbooks replace the data set, anything else
+     applies as an activities table.
+
+     An IMPORTED FILE is authoritative - rows are updated, added and removed
+     to match it, as always. A PASTE is not: the whole point of pasting is
+     copying a few rows out of a bigger sheet, and treating that as the
+     complete list would delete everything not pasted. Pasted rows therefore
+     update and add, never remove. */
+  async function importSheets(sheets, file, opts) {
+    if (sheets && looksLikeSourceWorkbook(sheets)) return loadSourceWorkbook(file, sheets);
+    const merge = !!(opts && opts.merge);
     try {
       const r = await VSM.table.importFile(file, data.process, sheets);
-      const lines = ["Apply " + file.name + "?", "", r.summary.updated + " activities updated, " + r.summary.added + " added, " + r.summary.removed + " removed."];
+      if (merge && !r.data) {
+        const existing = data.process.activities || [];
+        const existingIds = new Set(existing.map(a => a.id));
+        const incoming = new Map(r.activities.map(a => [a.id, a]));
+        r.activities = existing.map(a => incoming.get(a.id) || a)
+          .concat(r.activities.filter(a => !existingIds.has(a.id)));
+        r.summary = {
+          updated: [...incoming.keys()].filter(id => existingIds.has(id)).length,
+          added: [...incoming.keys()].filter(id => !existingIds.has(id)).length,
+          removed: 0
+        };
+        /* re-check predecessor references against the MERGED list: a pasted
+           row may point at a row it did not bring along, which is fine now */
+        const mergedIds = new Set(r.activities.map(a => a.id));
+        r.problems = r.problems.filter(p => {
+          const m = /predecessor '([^']+)' does not exist/.exec(p);
+          return !m || !mergedIds.has(m[1]);
+        });
+      }
+      const lines = ["Apply " + file.name + "?", "",
+        merge ? r.summary.updated + " activities updated, " + r.summary.added + " added. Pasted rows merge in; nothing is removed."
+          : r.summary.updated + " activities updated, " + r.summary.added + " added, " + r.summary.removed + " removed."];
       if (r.teams) lines.push("Teams sheet replaces " + Object.keys(r.teams).length + " teams.");
       if (r.phases) lines.push("Phases sheet replaces " + r.phases.length + " phases.");
       if (r.problems.length) lines.push("", "Warnings (" + r.problems.length + "):", ...r.problems.slice(0, 12).map(p => "• " + p), r.problems.length > 12 ? "…" : "");
-      if (!confirm(lines.join("\n"))) { toast("Import cancelled"); return; }
+      if (!await ask(lines, "Apply")) { toast("Import cancelled"); return; }
       const process = VSM.deepClone(data.process);
       process.activities = r.activities;
       if (r.teams) process.teams = r.teams;
@@ -844,6 +1018,20 @@
     // a linked folder is the source of truth, so drop any browser-held override
     localStorage.removeItem(DATA_KEY);
     data = candidate;
+    /* The incoming data may declare a different toggle vocabulary. Keep every
+       choice that still applies, default the rest, and drop the orphans -
+       otherwise the summary line reads "undefined" and the rules evaluate
+       against values that no longer exist. */
+    const fresh = VSM.rules.defaults(data.scenario.attributes);
+    (data.scenario.attributes || []).forEach(a => {
+      const v = state.scenario ? state.scenario[a.id] : undefined;
+      if (v === undefined) return;
+      if (a.type === "boolean") { if (typeof v === "boolean") fresh[a.id] = v; }
+      else if (a.type === "multi") { if (Array.isArray(v)) fresh[a.id] = v.filter(x => (a.options || []).some(o => o.value === x)); }
+      else if ((a.options || []).some(o => o.value === v)) fresh[a.id] = v;
+    });
+    state.scenario = fresh;
+    if (state.profile && !(data.scenario.presets || []).some(p => p.id === state.profile)) state.profile = null;
     describeSource(null);
     buildScenarioControls();
     buildOwnerFilter();
@@ -923,6 +1111,36 @@
     $("#btn-reset-state").onclick = () => { localStorage.removeItem(STATE_KEY); init(); };
     document.addEventListener("dragover", e => { e.preventDefault(); });
     document.addEventListener("drop", e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+    /* Paste straight from Excel / Google Sheets: copied cells arrive as
+       tab-separated text with a header row, and go through the same preview
+       as a dropped file. The largest friction cut there is: no export, no
+       save-as, no file picker - copy, click the page, paste. */
+    document.addEventListener("paste", e => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (document.querySelector(".overlay")) return;         // a dialog owns its own paste
+      const txt = e.clipboardData && e.clipboardData.getData ? e.clipboardData.getData("text/plain") : "";
+      if (!txt || txt.indexOf("\n") < 0) return;              // one line is not a table
+      const matrix = txt.indexOf("\t") >= 0
+        ? txt.replace(/\r/g, "").split("\n").map(l => l.split("\t")).filter(r => r.some(v => String(v).trim() !== ""))
+        : VSM.table.parseCSV(txt);
+      if (matrix.length < 2) return;
+      const heads = matrix[0].map(x => String(x || "").trim().toLowerCase());
+      if (!heads.includes("id")) { toast("Pasted table not recognised: the first row must be headers including 'id' (see the starter template in Export)", true); return; }
+      if (!heads.includes("name") && !heads.includes("task")) { toast("Pasted table needs a 'name' (or 'Task') column beside 'id'", true); return; }
+      e.preventDefault();
+      importSheets({ "Pasted": matrix }, { name: "pasted table (" + (matrix.length - 1) + " row" + (matrix.length === 2 ? "" : "s") + ")" }, { merge: true });
+    });
+    $("#btn-designer").onclick = () => VSM.designer.open(data, {
+      onApply: candidate => {
+        try { saveProcessOverride(candidate, "edited"); }
+        catch (e) { toast("Not applied: " + e.message, true); return false; }
+        data.process = candidate;
+        buildOwnerFilter();
+        rebuild();
+        toast("Process structure updated");
+      }
+    });
     let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderChart, 120); });
     bindTooltip();
   }

@@ -26,6 +26,10 @@ VSM.table = (function () {
     { key: "handoff",      label: "handoff",      width: 9,  hint: "TRUE / FALSE / blank (auto)" },
     { key: "handoffs",     label: "handoffs",     width: 18, hint: "declared handoff predecessor ids; separated" },
     { key: "milestone",    label: "milestone",    width: 10, hint: "TRUE = diamond only" },
+    { key: "status",       label: "status",       width: 10, hint: "todo | doing | done | blocked | skipped (project tracking; blank = todo)" },
+    { key: "progress",     label: "progress",     width: 10, hint: "0-100, % done of a 'doing' activity", type: "number" },
+    { key: "statusnote",   label: "statusnote",   width: 30, hint: "blocked reason / status comment" },
+    { key: "statusdate",   label: "statusdate",   width: 12, hint: "YYYY-MM-DD of the last status change" },
     { key: "description",  label: "description",  width: 60, hint: "free text" },
     { key: "notes",        label: "notes",        width: 50, hint: "free text" }
   ];
@@ -44,6 +48,8 @@ VSM.table = (function () {
       handoff: a.handoff === true ? "TRUE" : a.handoff === false ? "FALSE" : "",
       handoffs: (a.handoffs || []).join("; "),
       milestone: a.milestone ? "TRUE" : "",
+      status: a.status || "", progress: a.progress !== undefined && a.progress !== null ? a.progress : "",
+      statusnote: a.statusNote || "", statusdate: a.statusDate || "",
       description: a.description || "", notes: a.notes || ""
     };
   }
@@ -84,11 +90,19 @@ VSM.table = (function () {
       const h = bool(r.handoff); if (h === null) delete a.handoff; else a.handoff = h;
       const hs = splitIds(r.handoffs); if (hs.length) a.handoffs = hs; else delete a.handoffs;
       const m = bool(r.milestone); if (m) a.milestone = true; else delete a.milestone;
+      /* tracking columns: optional, tolerant, round-trip clean */
+      const st = String(r.status || "").trim().toLowerCase();
+      if (st) { a.status = st; if (!["todo", "doing", "done", "blocked", "skipped"].includes(st)) problems.push("Row " + line + " (" + id + "): status '" + r.status + "' is not todo/doing/done/blocked/skipped; it will be treated as not started."); }
+      else delete a.status;
+      const pg = num(r.progress);
+      if (pg !== null) a.progress = Math.max(0, Math.min(100, pg)); else delete a.progress;
+      const sn = String(r.statusnote || "").trim(); if (sn) a.statusNote = sn; else delete a.statusNote;
+      const sd = String(r.statusdate || "").trim(); if (sd) a.statusDate = sd; else delete a.statusDate;
       const desc = String(r.description || "").trim(); if (desc) a.description = desc; else delete a.description;
       const notes = String(r.notes || "").trim(); if (notes) a.notes = notes; else delete a.notes;
       // tidy key order for readable JSON
       const ordered = {};
-      ["id", "name", "phase", "owner", "category", "waste", "duration", "predecessors", "when", "overrides", "handoff", "handoffs", "milestone", "description", "notes"].forEach(k => { if (a[k] !== undefined) ordered[k] = a[k]; });
+      ["id", "name", "phase", "owner", "category", "waste", "duration", "predecessors", "when", "overrides", "handoff", "handoffs", "milestone", "status", "progress", "statusNote", "statusDate", "description", "notes"].forEach(k => { if (a[k] !== undefined) ordered[k] = a[k]; });
       Object.keys(a).forEach(k => { if (ordered[k] === undefined) ordered[k] = a[k]; });
       out.push(ordered);
     });
