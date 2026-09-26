@@ -979,5 +979,27 @@ function form(extra = {}) {
     assert.equal(r3.overridden.serviceTier.ignored, true);
   });
 
+  await test("1.3.0: derived attributes resolve inside build and overrides ride along", () => {
+    const defs = [
+      { id: "serviceTier", label: "Service tier", type: "enum", default: "Tier3",
+        options: ["Tier0", "Tier3", "Tier4"].map(v => ({ value: v, label: v })) },
+      { id: "drRequired", label: "DR required", type: "boolean", default: false, derived: true,
+        derive: { when: { serviceTier: { in: ["Tier0", "Tier3"] } } } }
+    ];
+    const acts = [task("always"), task("dr-step", { when: { drRequired: true } })];
+    const d = { process: { units: "hours", hoursPerDay: 8, activities: acts }, taxonomy: clone(shipped.taxonomy), scenario: { attributes: defs, rules: {} } };
+    const on = V.schedule.build(d.process, d.taxonomy, V.rules.defaults(defs), {}, defs);
+    assert.ok(on.nodes.some(n => n.id === "dr-step"), "derived true should include the step");
+    assert.ok(on.derived && on.derived.provenance.drRequired, "the model carries the derivation");
+    const off = V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(defs), { serviceTier: "Tier4" }), {}, defs);
+    assert.ok(!off.nodes.some(n => n.id === "dr-step"), "derived false should exclude the step");
+    const forced = V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(defs), { serviceTier: "Tier4" }), {}, defs,
+      { drRequired: { value: true, reason: "regulator says so" } });
+    assert.ok(forced.nodes.some(n => n.id === "dr-step"), "the override must win over the derivation");
+    assert.equal(forced.derived.overridden.drRequired.reason, "regulator says so");
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
