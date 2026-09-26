@@ -98,6 +98,8 @@
          They live outside state.scenario so a profile change never clears
          a decision somebody wrote a reason for. */
       overrides: {},
+      /* per-task include/exclude overrides: { id: true|false } (spec §4.6) */
+      taskOverrides: {},
       /* which wizard sections are open; 1 and 2 default open */
       sections: {},
       profile: null,
@@ -139,6 +141,9 @@
         }
         if (saved.sections && typeof saved.sections === "object" && !Array.isArray(saved.sections)) {
           state.sections = Object.assign({}, saved.sections);
+        }
+        if (saved.taskOverrides && typeof saved.taskOverrides === "object" && !Array.isArray(saved.taskOverrides)) {
+          state.taskOverrides = Object.assign({}, saved.taskOverrides);
         }
         state.profile = saved.profile || null;
         state.view = saved.view || state.view;
@@ -243,7 +248,8 @@
        leave a blank page with no way back, so report it like any other data
        error and keep the last good chart on screen. */
     try {
-      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes, state.overrides);
+      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes,
+        { derived: state.overrides, tasks: state.taskOverrides });
     } catch (e) {
       lastIssues = { errors: issues.errors.concat("the schedule could not be built: " + e.message), warnings: issues.warnings };
       renderIssues(lastIssues);
@@ -259,6 +265,9 @@
     renderMetrics();
     renderWasteChips();
     renderDerived();
+    renderSummary();
+    renderBanner();
+    if (!$("#why-drawer").hidden) renderDrawer();
     renderChart();
     if (document.body.classList.contains("presenting")) renderPresentation();
     if (selectedId) showDetails(selectedId);
@@ -385,6 +394,7 @@
         const because = (p.because || []).slice(0, 4);
         if (because.length) chip.appendChild(h("div", { class: "dc-why" },
           "Because: " + because.map(b => (b.satisfied === false ? "not: " : "") + b.label + " = " + b.valueLabel).join("  ·  ")));
+        else chip.appendChild(h("div", { class: "dc-why" }, "No rule matched; using the default."));
       }
       const actions = h("div", { class: "dc-actions" });
       actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => overrideDialog(attr, p.value, ov) }, ov ? "Change" : "Override"));
@@ -432,6 +442,129 @@
         } }, "Apply override"))));
     document.body.appendChild(overlay);
     paint();
+  }
+
+  /* ------------------------------------------------------------ result summary
+     and the "why" drawer (spec §4.6). The drawer's Excluded tab is the point:
+     reviewers challenge absences more than presences, and every row cites the
+     specific answers that decided it. */
+  function renderSummary() {
+    const box = $("#result-summary");
+    if (!box || !model) return;
+    const total = (data.process.activities || []).length;
+    const U = units();
+    box.innerHTML = "";
+    box.hidden = false;
+    box.appendChild(h("div", { class: "control-group" }, "Result"));
+    box.appendChild(h("div", { class: "summary-line" },
+      model.nodes.length + " of " + total + " tasks included · " + model.metrics.gates + " gates · " +
+      fmt(model.metrics.currentElapsed) + " " + U.abbr));
+    box.appendChild(h("button", { type: "button", class: "ghost", onclick: () => openDrawer("included") }, "Why these tasks?"));
+  }
+
+  let drawerTab = "included";
+  function openDrawer(tab) { drawerTab = tab || drawerTab; $("#why-drawer").hidden = false; renderDrawer(); }
+  function closeDrawer() { $("#why-drawer").hidden = true; }
+
+  function explainLeaves(when) {
+    try { return VSM.derive.explain(when, model.scenario, namedRules(), data.scenario.attributes) || []; }
+    catch (e) { return []; }
+  }
+  function whyText(when, wantSatisfied) {
+    if (when === undefined) return "Always included";
+    const ls = explainLeaves(when).filter(l => (wantSatisfied ? l.satisfied : !l.satisfied));
+    if (!ls.length) return VSM.rules.describe(when, data.scenario.attributes, namedRules());
+    return ls.slice(0, 4).map(l => l.label + " = " + l.valueLabel).join("  ·  ");
+  }
+  /* group rows Stage -> Phase, mirroring the chart bands */
+  function grouped(rows) {
+    const phases = data.process.phases || [];
+    const stages = data.process.stages || [];
+    const phaseOf = id => phases.find(p => p.id === id);
+    const out = new Map();
+    rows.forEach(r => {
+      const ph = phaseOf(r.phase);
+      const st = ph && ph.stage ? (stages.find(s => s.id === ph.stage) || {}).label : null;
+      const key = (st ? st + " · " : "") + (ph ? ph.label : "No phase");
+      if (!out.has(key)) out.set(key, []);
+      out.get(key).push(r);
+    });
+    return out;
+  }
+  function drawerRow(r, included) {
+    const a = model.nodeById.has(r.id) ? model.nodeById.get(r.id).act : (data.process.activities || []).find(x => x.id === r.id);
+    const ov = state.taskOverrides[r.id];
+    const row = h("details", { class: "why-row" + (ov !== undefined ? " overridden" : "") });
+    row.appendChild(h("summary", null,
+      h("span", { class: "wr-name" }, r.name || r.id),
+      ov !== undefined ? h("em", { class: "dc-badge" }, ov ? "forced in" : "forced out") : null));
+    const body = h("div", { class: "wr-body" });
+    const team = a && a.owner && data.process.teams && data.process.teams[a.owner];
+    if (team) body.appendChild(h("div", null, "Owner: " + team.label));
+    if (a && a.triggerExplanation) body.appendChild(h("div", null, a.triggerExplanation));
+    body.appendChild(h("div", { class: "dc-why" },
+      (included ? "Included: " : "Excluded because: ") + whyText(r.when, included)));
+    const allow = a && (a.canOverride || "yes");
+    if (a && r.when !== undefined) {
+      if (ov !== undefined) {
+        body.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => { delete state.taskOverrides[r.id]; rebuild(); } }, "Clear override"));
+      } else if (included && allow === "governed") {
+        body.appendChild(h("div", { class: "hint" }, "Governed gate - it cannot be switched off."));
+      } else {
+        body.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+          state.taskOverrides[r.id] = !included; saveState(); rebuild();
+        } }, included ? "Exclude anyway" : "Include anyway"));
+      }
+    }
+    row.appendChild(body);
+    return row;
+  }
+  function renderDrawer() {
+    const box = $("#why-drawer");
+    if (!box || !model) return;
+    box.innerHTML = "";
+    const included = model.nodes.map(n => ({ id: n.id, name: n.name, phase: n.act.phase, when: n.act.when }));
+    const excluded = model.excluded || [];
+    box.appendChild(h("div", { class: "drawer-head" },
+      h("button", { type: "button", class: (drawerTab === "included" ? "on" : ""), onclick: () => { drawerTab = "included"; renderDrawer(); } }, "Included (" + included.length + ")"),
+      h("button", { type: "button", class: (drawerTab === "excluded" ? "on" : ""), onclick: () => { drawerTab = "excluded"; renderDrawer(); } }, "Excluded (" + excluded.length + ")"),
+      h("button", { class: "icon", type: "button", title: "Close", onclick: closeDrawer }, "×")));
+    const rows = drawerTab === "included" ? included : excluded;
+    const body = h("div", { class: "drawer-body" });
+    grouped(rows).forEach((list, key) => {
+      body.appendChild(h("div", { class: "control-group" }, key));
+      list.forEach(r => body.appendChild(drawerRow(r, drawerTab === "included")));
+    });
+    if (!rows.length) body.appendChild(h("p", { class: "hint" }, "Nothing here under the current scenario."));
+    box.appendChild(body);
+  }
+
+  /* ------------------------------------------------------------ assumptions
+     banner (spec §4.6 addition 3): shown only when something needs attention,
+     dismissible until the item set changes. */
+  let bannerDismissed = "";
+  function renderBanner() {
+    const box = $("#assumptions");
+    if (!box || !model) return;
+    const items = [];
+    const noEst = model.nodes.filter(n => n.act.noEstimate);
+    if (noEst.length) items.push(noEst.length + " task(s) have no time estimate (" +
+      noEst.slice(0, 3).map(n => n.name).join(", ") + (noEst.length > 3 ? ", …" : "") + ") - the schedule understates any scenario including them.");
+    const ovd = model.derived && model.derived.overridden;
+    if (ovd) Object.keys(ovd).forEach(id => {
+      if (ovd[id].ignored) return;
+      const a = data.scenario.attributes.find(x => x.id === id);
+      items.push("Derived value overridden: " + (a ? a.label : id) + (ovd[id].reason ? " - “" + ovd[id].reason + "”" : ""));
+    });
+    const tov = Object.keys(state.taskOverrides || {});
+    if (tov.length) items.push(tov.length + " task override(s) in force: " + tov.slice(0, 4).join(", ") + (tov.length > 4 ? ", …" : ""));
+    if (state.scenario.serviceTier === "tbd") items.push("Service tier is not yet determined - the tier-driven controls are provisional.");
+    const hash = JSON.stringify(items);
+    if (!items.length || hash === bannerDismissed) { box.hidden = true; return; }
+    box.innerHTML = "";
+    box.hidden = false;
+    items.forEach(i => box.appendChild(h("div", { class: "banner-item" }, i)));
+    box.appendChild(h("button", { class: "icon", type: "button", title: "Dismiss", onclick: () => { bannerDismissed = hash; box.hidden = true; } }, "×"));
   }
 
   /* Scheduler notes are merged with whatever validation reported for this data. */
