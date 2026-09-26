@@ -99,6 +99,16 @@ VSM.schedule = (function () {
     /* 1. inclusion */
     const includedIds = new Set(acts.filter(a => VSM.rules.evaluate(a.when, scenario, named)).map(a => a.id));
 
+    /* 1b. the excluded partition, kept beside the model. Reviewers challenge
+       absences more than presences; the drawer's Excluded tab renders from
+       this, each row explaining itself via the rule it failed. */
+    const phaseStage = new Map((process.phases || []).map(ph => [ph.id, ph.stage]));
+    const excluded = acts.filter(a => !includedIds.has(a.id)).map(a => ({
+      id: a.id, name: a.name || a.id, phase: a.phase,
+      stage: a.phase !== undefined ? phaseStage.get(a.phase) : undefined,
+      when: a.when
+    }));
+
     /* 2. predecessor sets (explicit successors are folded in) */
     const predMap = new Map(acts.map(a => [a.id, new Set(a.predecessors || [])]));
     acts.forEach(a => (a.successors || []).forEach(s => { if (predMap.has(s)) predMap.get(s).add(a.id); }));
@@ -306,7 +316,7 @@ VSM.schedule = (function () {
     const orgPairs = new Set(links.filter(l => l.crossOrg).map(l => [l.fromTeam.org, l.toTeam.org].sort().join(" | ")));
     m.orgBoundaries = orgPairs.size;
 
-    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy, derived };
+    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy, derived, excluded };
   }
 
   return { build, resolveDuration, resolveTime, setDuration };

@@ -1175,5 +1175,29 @@ function form(extra = {}) {
     assert.equal(shown.costOver1k, true, "re-showing restores the retained value");
   });
 
+  await test("1.4.0: the model carries its exclusions and explain() cites real answers", () => {
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    /* RF#1: included + excluded partition the register, three scenarios */
+    [ {}, { serviceTier: "Tier 4" }, { hosting: "on-prem", network: ["inbound-internet"] } ].forEach(sc => {
+      const m = build2(sc);
+      assert.equal(m.nodes.length + m.excluded.length, d.process.activities.length, JSON.stringify(sc));
+      const inc = new Set(m.nodes.map(n => n.id));
+      assert.ok(m.excluded.every(x => !inc.has(x.id)), "partitions overlap");
+    });
+    /* an excluded row knows its phase, stage and rule */
+    const t4 = build2({ serviceTier: "Tier 4" });
+    const dr = t4.excluded.find(x => x.id === "dr-design");
+    assert.ok(dr, "dr-design should be excluded at Tier 4");
+    assert.equal(dr.phase, "design");
+    assert.equal(dr.stage, "deliver");
+    assert.ok(dr.when !== undefined);
+    /* RF#5: explain expands a named-rule reference into real answers */
+    const leaves = V.derive.explain(dr.when, t4.scenario, d.scenario.rules, d.scenario.attributes);
+    const tier = leaves.find(l => l.attr === "serviceTier");
+    assert.ok(tier && tier.satisfied === false && tier.valueLabel === "Tier 4", JSON.stringify(leaves));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
