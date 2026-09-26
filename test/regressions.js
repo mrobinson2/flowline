@@ -1095,7 +1095,9 @@ function form(extra = {}) {
     h.api.loadState();
     const s = h.api.getState().scenario;
     assert.equal(s.hosting, "azure", "a retired enum value must fall back to the default");
-    assert.deepEqual(s.integrations, ["mft"], "retired multi values must be filtered out");
+    /* JSON compare: the state lives in the VM realm, whose Array prototype
+       fails deepStrictEqual against ours on identical values */
+    assert.equal(JSON.stringify(s.integrations), JSON.stringify(["mft"]), "retired multi values must be filtered out");
     assert.equal(s.aiWorkload, true, "valid saved answers must survive");
     assert.equal(s.pilotPoc, undefined, "a retired attribute id must not ride along");
   });
