@@ -1322,5 +1322,51 @@ function form(extra = {}) {
     } finally { delete global.localStorage; }
   });
 
+  await test("1.4.0: the impact replay sees what the chart sees; rule text round-trips bare rule ids", () => {
+    /* a disabled answer is neutralized before the build - in the app and in
+       the replay alike, or an untouched candidate reports phantom changes */
+    const syn = {
+      process: { units: "hours", activities: [task("a"), task("g", { predecessors: ["a"], when: { gated: true } })] },
+      taxonomy: clone(shipped.taxonomy),
+      scenario: {
+        attributes: [
+          { id: "tier", label: "Tier", type: "enum", default: "t0", options: [{ value: "t0" }, { value: "t1" }], section: 4 },
+          { id: "gated", label: "Gated", type: "boolean", default: false, enabledWhen: { tier: "t0" }, section: 4 }
+        ],
+        rules: {}
+      }
+    };
+    const answers = { tier: "t1", gated: true };           // gated is on but disabled
+    const eff = V.rules.effective(syn.scenario.attributes, answers, {});
+    assert.equal(eff.gated, false);
+    assert.equal(answers.gated, true, "effective() must not touch the person's answers");
+    const m = V.schedule.build(syn.process, syn.taxonomy, eff, {}, syn.scenario.attributes);
+    const run = V.runs.record(m, { scenario: answers }, "disabled answer");
+    assert.deepEqual(run.includedKeys, ["a"]);
+    const [row] = V.admin.impact(syn, clone(syn), [run]);
+    assert.equal(row.added.length + row.removed.length, 0, "unchanged candidate must replay identically: " + JSON.stringify(row));
+
+    /* the editor names rules R_<id>; shipped rules are keyed bare */
+    const d = clone({ process: shipped.process, scenario: shipped.scenario });
+    const ids = Object.keys(d.scenario.rules);
+    d.process.activities.filter(a => a.when !== undefined).forEach(a => {
+      const t = V.admin.ruleToText(a.when);
+      if (t.json) return;
+      const back = V.admin.textToRule(t.text, d.scenario.attributes, ids).rule;
+      assert.deepEqual(back, a.when, a.id + ": " + t.text);
+    });
+    const vc = V.admin.ruleToText({ any: [{ contractChangeRequired: true }, "newVendor"] });
+    assert.equal(vc.text, "contractChangeRequired OR R_newVendor");
+    assert.equal(V.admin.textToRule("FALSE", d.scenario.attributes, ids).rule, false);
+    /* a self-reference compiles (the name exists) - validation is what refuses it */
+    assert.equal(V.admin.textToRule("R_drRequired", d.scenario.attributes, ids).rule, "drRequired");
+    /* an unrepresentable shape falls back to JSON rather than lying */
+    const j = V.admin.ruleToText({ x: { gte: 3 } });
+    assert.ok(j.json && JSON.parse(j.text).x.gte === 3);
+    /* errors carry a column and a suggestion */
+    try { V.admin.textToRule("serviceTer = \"Tier 1\"", d.scenario.attributes, ids); assert.fail("should throw"); }
+    catch (e) { assert.equal(e.column, 1); assert.ok(/did you mean 'serviceTier'/.test(e.message), e.message); }
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

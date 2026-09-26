@@ -174,21 +174,8 @@
 
   function saveState() { try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
 
-  /* Disabled controls (enabledWhen false) contribute a neutral value so rules
-     never see stale input. HIDDEN controls (shownWhen false, or diagnostic-
-     only) get the same treatment: their values stay in state - re-showing
-     restores them - but while hidden they must not fire rules the person can
-     no longer see the cause of (spec §4.5). */
-  function effectiveScenario() {
-    const s = Object.assign({}, state.scenario);
-    const neutralize = a => { s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]); };
-    data.scenario.attributes.forEach(a => {
-      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) { neutralize(a); return; }
-      if (a.diagnosticOnly) { neutralize(a); return; }
-      if (a.shownWhen !== undefined && !a.derived && !VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules())) neutralize(a);
-    });
-    return s;
-  }
+  /* what the engine sees: disabled and hidden answers neutralized (rules.js) */
+  function effectiveScenario() { return VSM.rules.effective(data.scenario.attributes, state.scenario, namedRules()); }
   function scenarioSummary() {
     const s = effectiveScenario(), parts = [];
     data.scenario.attributes.forEach(a => {

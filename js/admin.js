@@ -4,9 +4,9 @@
    This file is the Node-tested half: reference finding (what blocks retiring
    a variable), the IMPACT PREVIEW (replay every saved scenario against the
    candidate data and diff each against what it recorded - the one feature
-   without which nobody dares edit a rule), and the version log. The overlay
-   that drives it lives in js/app.js, and the apply path goes through the same
-   validate-then-persist contract as every import.
+   without which nobody dares edit a rule), the version log, and the text
+   round trip the rule editor uses. The overlay is js/admin-ui.js; its apply
+   path goes through the same validate-then-persist contract as every import.
    ========================================================================== */
 (function (root) {
   const VSM = root.VSM = root.VSM || {};
@@ -59,8 +59,11 @@
     return (runs || []).map(run => {
       let after;
       try {
+        /* the answers as the engine sees them under the CANDIDATE's gates -
+           the same neutralizing the app applies before every build */
+        const answers = VSM.rules.effective(candidate.scenario.attributes, run.answers || {}, candidate.scenario.rules);
         const m = VSM.schedule.build(candidate.process, candidate.taxonomy || data.taxonomy,
-          Object.assign({}, run.answers), candidate.scenario.rules, candidate.scenario.attributes,
+          answers, candidate.scenario.rules, candidate.scenario.attributes,
           { derived: run.overrides || {}, tasks: run.taskOverrides || {} });
         after = m.nodes.map(n => n.id);
       } catch (e) {
@@ -76,6 +79,37 @@
     });
   }
 
+  /* Rule text for the editor. The expression language names rules R_<id>;
+     workbook imports key them that way, but the shipped data (and anything
+     hand-written) keys them bare, e.g. "drRequired". The editor shows every
+     rule reference as R_ and maps it back on the way in, so a bare-keyed rule
+     round-trips instead of reading as an unknown attribute. */
+  const alias = id => (/^R_/.test(id) ? id : "R_" + id);
+  function mapRefs(rule, fn, d) {
+    const depth = d || 0;
+    if (depth > 64) return rule;
+    if (typeof rule === "string") return fn(rule);
+    if (!rule || typeof rule !== "object" || Array.isArray(rule)) return rule;
+    const keys = Object.keys(rule);
+    if (keys.length === 1 && (keys[0] === "all" || keys[0] === "any"))
+      return { [keys[0]]: (rule[keys[0]] || []).map(r => mapRefs(r, fn, depth + 1)) };
+    if (keys.length === 1 && keys[0] === "not") return { not: mapRefs(rule.not, fn, depth + 1) };
+    return rule;                                   // a comparison: values are data, not refs
+  }
+  /* -> { text, json: false } or, for a shape the grammar cannot say,
+     { text: <pretty JSON>, json: true } */
+  function ruleToText(rule) {
+    try { return { text: VSM.expr.print(mapRefs(rule, alias)), json: false }; }
+    catch (e) { return { text: JSON.stringify(rule, null, 2), json: true }; }
+  }
+  /* -> { rule, warnings }; throws with .column (from expr.compile) */
+  function textToRule(text, attrDefs, ruleIds) {
+    const ids = ruleIds || [];
+    const back = new Map(ids.map(id => [alias(id), id]));
+    const c = VSM.expr.compile(text, attrDefs, [...back.keys()]);
+    return { rule: mapRefs(c.rule, r => (back.has(r) ? back.get(r) : r)), warnings: c.warnings };
+  }
+
   /* every applied change leaves a row; the log travels with the scenario */
   function pushVersion(scenario, entry) {
     if (!Array.isArray(scenario.versions)) scenario.versions = [];
@@ -84,6 +118,6 @@
     return scenario.versions;
   }
 
-  VSM.admin = { referencesTo, impact, pushVersion };
+  VSM.admin = { referencesTo, impact, pushVersion, ruleToText, textToRule };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.admin;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

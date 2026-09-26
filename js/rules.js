@@ -132,6 +132,24 @@ VSM.rules = (function () {
 
   function isEnabled(attrDef, scenario, named) { return evaluate(attrDef.enabledWhen, scenario, named); }
 
+  /* The answers the engine actually sees. Disabled controls (enabledWhen
+     false) contribute a neutral value so rules never see stale input. HIDDEN
+     controls (shownWhen false, or diagnostic-only) get the same treatment:
+     their values stay in the person's answers - re-showing restores them - but
+     while hidden they must not fire rules the person can no longer see the
+     cause of (spec §4.5). Shared by the app and the admin impact preview: a
+     replay that skipped this would report changes the chart never shows. */
+  function effective(attrDefs, answers, named) {
+    const s = Object.assign({}, answers);
+    const neutralize = a => { s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]); };
+    (attrDefs || []).forEach(a => {
+      if (!isEnabled(a, answers, named)) { neutralize(a); return; }
+      if (a.diagnosticOnly) { neutralize(a); return; }
+      if (a.shownWhen !== undefined && !a.derived && !evaluate(a.shownWhen, answers, named)) neutralize(a);
+    });
+    return s;
+  }
+
   /* Some toggles drag others along: asking for an RFP means there is a
      discovery phase whether or not anyone ticked it. `implies` on an attribute
      lists the toggles it turns on, written either as "discovery" or as
@@ -179,6 +197,6 @@ VSM.rules = (function () {
     return Object.assign({}, scenario, set);
   }
 
-  return { evaluate, describe, defaults, isEnabled, applyImplications, applyPreset, OPS };
+  return { evaluate, describe, defaults, isEnabled, effective, applyImplications, applyPreset, OPS };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = VSM.rules;
