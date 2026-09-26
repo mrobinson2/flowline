@@ -1230,5 +1230,43 @@ function form(extra = {}) {
     assert.ok(legacy.nodes.some(n => n.id === "arb"));
   });
 
+  await test("1.4.0: scenario runs record, reload identically, diff, and refuse lying storage", () => {
+    /* Node has no localStorage; the module takes the global when present */
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+    try {
+      const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+      const answers = V.rules.defaults(d.scenario.attributes);
+      const build2 = (sc, ov) => V.schedule.build(d.process, d.taxonomy, Object.assign({}, answers, sc || {}), d.scenario.rules, d.scenario.attributes, ov);
+      const m1 = build2({}, { derived: { architectureLane: { value: "custom", reason: "board" } }, tasks: {} });
+      const run = V.runs.record(m1, { scenario: answers, overrides: { architectureLane: { value: "custom", reason: "board" } }, taskOverrides: {} }, "baseline custom");
+      assert.equal(run.name, "baseline custom");
+      assert.equal(run.totals.tasks, m1.nodes.length);
+      V.runs.save(run);
+      assert.equal(V.runs.list().length, 1);
+      /* RF#1: reload = rebuild from the run's answers + overrides -> identical */
+      const saved = V.runs.list()[0];
+      const m2 = build2(saved.answers, { derived: saved.overrides, tasks: saved.taskOverrides });
+      assert.equal(JSON.stringify(m2.nodes.map(n => n.id).sort()), JSON.stringify(saved.includedKeys.slice().sort()));
+      assert.equal(m2.metrics.currentElapsed, saved.totals.elapsed);
+      /* RF#2: diff two profiles */
+      const saas = d.scenario.presets.find(p2 => p2.id === "adopt-saas").set;
+      const cots = d.scenario.presets.find(p2 => p2.id === "deploy-cots").set;
+      const ra = V.runs.record(build2(saas), { scenario: Object.assign({}, answers, saas), overrides: {}, taskOverrides: {} }, "saas");
+      const rb = V.runs.record(build2(cots), { scenario: Object.assign({}, answers, cots), overrides: {}, taskOverrides: {} }, "cots");
+      const df = V.runs.diff(ra, rb);
+      assert.ok(df.addedTasks.length + df.removedTasks.length > 0, "profiles must differ");
+      assert.ok(typeof df.elapsedDelta === "number");
+      assert.ok(df.changedAnswers.some(c => c.id === "workType" && c.from === "saas" && c.to === "cots"), JSON.stringify(df.changedAnswers));
+      /* the ring caps at 20 */
+      for (let i = 0; i < 25; i++) V.runs.save(V.runs.record(m1, { scenario: answers, overrides: {}, taskOverrides: {} }, "r" + i));
+      assert.equal(V.runs.list().length, 20);
+      /* RF#3: storage that accepts and drops the write must throw */
+      global.localStorage.setItem = () => {};
+      store.clear();
+      assert.throws(() => V.runs.save(run), /keep|stor/i);
+    } finally { delete global.localStorage; }
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
