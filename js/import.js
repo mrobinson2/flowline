@@ -500,6 +500,7 @@
     const activities = [], seen = new Set();
     const unmatchedInMatrix = [], matrixConflicts = [];
     let leadCur = 0, cycleCur = 0, leadOpt = 0, cycleOpt = 0;
+    let missingEstimates = 0;
     taskRows.forEach(r => {
       const id = txt(r.id);
       if (!id) { report.warnings.push("Row " + r.__row + " has no ID and was skipped."); return; }
@@ -528,6 +529,15 @@
       let lo = num(r.leadOpt), co = num(r.cycleOpt);
       if (lo === null) lo = lc; if (co === null) co = cc;
       if (num(r.leadCur) === null && txt(r.leadCur) !== "") report.warnings.push(id + ": current lead time '" + txt(r.leadCur) + "' is not a number, treated as 0.");
+      /* A row with BOTH current cells blank has no estimate at all. Spec rule:
+         surfaced as a warning, never silently treated as zero - a scenario
+         that includes this task understates its lead time by the whole task. */
+      const noEstimate = num(r.leadCur) === null && num(r.cycleCur) === null
+        && txt(r.leadCur) === "" && txt(r.cycleCur) === "";
+      if (noEstimate) {
+        missingEstimates++;
+        report.warnings.push(id + ": no current time estimate; treated as 0, so any scenario including this task understates its lead time.");
+      }
       leadCur += lc; cycleCur += cc; leadOpt += lo; cycleOpt += co;
 
       const current = Math.round((lc + cc) * 1000) / 1000;
@@ -552,6 +562,7 @@
         appliesWhen: phrase || undefined
       };
       if (waste) a.waste = waste;
+      if (noEstimate) a.noEstimate = true;
       /* The matrix owns inclusion when it exists; the Applies When phrase is
          then documentation only, kept on the activity for the details panel. */
       if (matrix) {
@@ -774,6 +785,7 @@
     report.counts = {
       tasks: activities.length, phases: phaseOrder.length, teams: Object.keys(teams).length,
       edges: edgeCount, edgesAdded: edgeAdded, conditions: attributes.length,
+      missingEstimates,
       gates: activities.filter(a => a.category === "gate").length,
       handoffs: activities.filter(a => a.category === "handoff").length,
       rework: activities.filter(a => a.category === "rework").length,
@@ -864,6 +876,7 @@
       "elapsed " + t.elapsedCurrent + " h → " + t.elapsedOptimal + " h   ·   flow efficiency " + t.flowEfficiency + "% → " + t.flowEfficiencyOptimal + "%"
     ];
     if (report.unmappedList && report.unmappedList.length) lines.push(report.unmappedList.length + " value(s) outside the known picklists — see the panel");
+    if (c.missingEstimates) lines.push(c.missingEstimates + " task(s) have no current time estimate (treated as 0)");
     if (report.warnings.length) lines.push(report.warnings.length + " warning(s)");
     return lines.join("\n");
   }

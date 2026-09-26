@@ -748,5 +748,20 @@ function form(extra = {}) {
     assert.ok(!warned, "a reference to an existing unpasted row must not warn");
   });
 
+  await test("1.2.0: blank current-time cells are surfaced, never silent zero", () => {
+    const sheets = { "Task List": [
+      ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+      ["1", "P1", "Estimated step", "", "8", "4"],
+      ["2", "P1", "Hardware step, no estimate", "1", "", ""]
+    ] };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0);
+    assert.ok(r.report.warnings.some(w => w.startsWith("2") && w.includes("no current time estimate")),
+      "expected a warning naming task 2, got: " + JSON.stringify(r.report.warnings));
+    assert.equal(r.report.counts.missingEstimates, 1);
+    assert.equal(r.process.activities.find(a => a.id === "2").noEstimate, true);
+    assert.equal(r.process.activities.find(a => a.id === "1").noEstimate, undefined);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

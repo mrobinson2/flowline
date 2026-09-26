@@ -89,7 +89,7 @@ These bind all phases. Changing one means revisiting this roadmap.
 
 **D4 — Derivations are data.** An attribute row with `Derived = Yes` carries its logic; booleans as one expression, enums as ordered cases (`derive: { cases: [{ when, value }], default }` in JSON form; the workbook `Derivation` column holds the §5 text). `js/derive.js` computes them in declaration order, records provenance (the attribute values that fired), and respects sticky overrides. `applyImplications` stays for backward compatibility.
 
-**D5 — The real register is a data drop-in.** The GMF 153-task workbook is not in this repo and is not a code dependency. Every phase is verified against `fixture/make_fixture.py` extended to emit the new sheets/columns. When the real `GMF-Value-Stream-v5.xlsx` arrives, it imports through the same path with zero code changes — that is the acceptance test of the whole program.
+**D5 — The real register is a data drop-in.** The source organization's 153-task workbook is not in this repo and is not a code dependency (this repo ships as a template and its tests ban company-specific strings). Every phase is verified against `fixture/make_fixture.py` extended to emit the new sheets/columns. When the real v5 workbook arrives, it imports through the same path with zero code changes — that is the acceptance test of the whole program.
 
 ## Phase dependency graph and estimates
 
@@ -509,6 +509,6 @@ Stage bands on the Gantt (band by stage when `stages` exist, display toggle keep
 
 ## Out of scope, permanently or until data arrives
 
-- **The real GMF register** (153 tasks, 92 variables, 12 rules): not in this repo. Decision D5 makes it a drop-in; nothing in this program fabricates it.
-- **Spec open items §9** (hardware time estimates, `R_ThirdPartyRisk` validation with Cybersecurity, Stage-3 grouping): owned by GMF stakeholders, not code.
+- **The real source register** (153 tasks, 92 variables, 12 rules): not in this repo. Decision D5 makes it a drop-in; nothing in this program fabricates it.
+- **Spec open items §9** (hardware time estimates, `R_ThirdPartyRisk` validation with Cybersecurity, Stage-3 grouping): owned by the source organization's stakeholders, not code.
 - **Backstage plugin parity** with new features: the embed API keeps working (validated by existing tests); porting the new sidebar into the example plugin is a separate effort.
