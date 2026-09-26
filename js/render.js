@@ -242,6 +242,9 @@ VSM.render = (function () {
     const linkMode = disp.links || "all";
     if (linkMode !== "none") {
       const handoffColor = ((model.taxonomy.families || {}).handoff || {}).optimal || "#A855F7";
+      /* id -> name over ALL activities (via names excluded steps, which have no
+         node). Built once, lazily - per-link construction is O(links x activities). */
+      let bridgeNames = null;
       model.links.forEach(lk => {
         if (linkMode === "handoffs" && !lk.handoff) return;
         const a = model.nodeById.get(lk.from), b = model.nodeById.get(lk.to);
@@ -251,12 +254,22 @@ VSM.render = (function () {
         const mid = x1 + Math.max(4, Math.min(10, dx / 2));
         const d = "M" + x1 + " " + y1 + " H" + mid + " V" + y2 + " H" + x2;
         const dim = a.dim && b.dim;
-        el("path", {
+        const attrs = {
           d, fill: "none",
           stroke: lk.handoff ? handoffColor : T.link,
           "stroke-opacity": lk.handoff ? (dim ? 0.25 : 0.7) : (dim ? 0.4 : 1),
           "stroke-width": lk.handoff ? L.linkW + 0.3 : L.linkW
-        }, g);
+        };
+        /* dashed = this dependency is preserved across a step the scenario
+           excluded; the title names the step so a reviewer can see nothing
+           was dropped. Inline attributes, so the SVG export keeps both. */
+        if (lk.bridged) attrs["stroke-dasharray"] = "4 3";
+        const p = el("path", attrs, g);
+        if (lk.bridged && lk.via && lk.via.length) {
+          if (!bridgeNames) bridgeNames = new Map((model.process.activities || []).map(x => [x.id, x.name || x.id]));
+          const names = lk.via.map(id => bridgeNames.get(id) || id);
+          el("title", null, p).textContent = "Bridged through " + names.join(", ") + " (excluded by the scenario)";
+        }
       });
     }
 

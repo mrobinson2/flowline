@@ -748,5 +748,79 @@ function form(extra = {}) {
     assert.ok(!warned, "a reference to an existing unpasted row must not warn");
   });
 
+  await test("1.2.0: blank current-time cells are surfaced, never silent zero", () => {
+    const sheets = { "Task List": [
+      ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+      ["1", "P1", "Estimated step", "", "8", "4"],
+      ["2", "P1", "Hardware step, no estimate", "1", "", ""]
+    ] };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0);
+    assert.ok(r.report.warnings.some(w => w.startsWith("2") && w.includes("no current time estimate")),
+      "expected a warning naming task 2, got: " + JSON.stringify(r.report.warnings));
+    assert.equal(r.report.counts.missingEstimates, 1);
+    assert.equal(r.process.activities.find(a => a.id === "2").noEstimate, true);
+    assert.equal(r.process.activities.find(a => a.id === "1").noEstimate, undefined);
+  });
+
+  await test("1.2.0: Scenario Matrix round-trips through the Task List export", async () => {
+    const buf = fs.readFileSync(path.join(__dirname, "..", "fixture", "sample-value-stream.xlsx"));
+    const r = await V.import.fromWorkbook(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {});
+    assert.equal(r.report.errors.length, 0);
+    assert.ok(r.scenario.matrixSheet, "importer did not retain the matrix sheet");
+    assert.ok(r.scenario.matrixSheet.rows.length >= 100, "matrix rows missing");
+    const model = V.schedule.build(r.process, r.taxonomy,
+      V.rules.defaults(r.scenario.attributes), r.scenario.rules, r.scenario.attributes);
+    const out = V.exportWorkbook.sheets(model, { scenarioCfg: r.scenario, scenarioSummary: "" });
+    const m = out.find(s => s.name === "Scenario Matrix");
+    assert.ok(m, "export writes no Scenario Matrix sheet");
+    assert.equal(m.rows.length, r.scenario.matrixSheet.rows.length);
+    assert.deepEqual(m.headers, r.scenario.matrixSheet.headers);
+  });
+
+  await test("1.2.0: links across an excluded step carry bridged + via", () => {
+    const data = dataset([
+      task("a"),
+      task("b", { predecessors: ["a"], when: false }),
+      task("c", { predecessors: ["b"] })
+    ]);
+    const model = build(data);
+    const bridge = model.links.find(l => l.from === "a" && l.to === "c");
+    assert.ok(bridge, "a->c bridge missing");
+    assert.equal(bridge.bridged, true);
+    assert.deepEqual(bridge.via, ["b"]);
+    const plain = build(dataset([task("a"), task("b", { predecessors: ["a"] })]))
+      .links.find(l => l.from === "a" && l.to === "b");
+    assert.equal(plain.bridged, false);
+    assert.equal(plain.via, undefined);
+  });
+
+  await test("1.2.0: bridged-link names do not rebuild the activity map per link", () => {
+    /* The first build of the bridge annotation constructed a Map over every
+       activity once per bridged link - O(links x activities), the same class
+       of scan 1.0.3 finding 16 removed from the importer. */
+    withRenderer(render => {
+      const ms = [];
+      for (const N of [1500, 6000]) {                          // 4x the input
+        const acts = [task("v0")];
+        for (let i = 0; i < N - 1; i++) {
+          acts.push(task("x" + i, { predecessors: ["v" + i], when: false }));
+          acts.push(task("v" + (i + 1), { predecessors: ["x" + i] }));
+        }
+        const model = build(dataset(acts));
+        assert.equal(model.links.filter(l => l.bridged).length, N - 1, "chain should bridge every link");
+        const L = V.layout.interactive(N, { width: 1200, zoom: 1, density: "normal", columns: true });
+        const started = Date.now();
+        const svg = render.draw(model, { layout: L, view: "current", display: {}, filters: null, scenarioSummary: "", theme: "dark" });
+        ms.push(Date.now() - started);
+        const titled = walk(svg).filter(e => e.tag === "title" && /^Bridged through /.test(e.textContent)).length;
+        assert.equal(titled, N - 1, "every bridged link still carries its annotation");
+      }
+      assert.ok(ms[1] < 4000, "drawing 6,000 bridged links took " + ms[1] + "ms; the name map is being rebuilt per link");
+      // quadratic would be ~16x for 4x the input; allow generous slack for a cold JIT
+      assert.ok(ms[1] < Math.max(ms[0], 25) * 8, "draw time grew " + ms[0] + "ms -> " + ms[1] + "ms, faster than linearly");
+    });
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

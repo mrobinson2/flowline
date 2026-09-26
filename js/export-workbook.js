@@ -342,6 +342,18 @@
           })
         });
       }
+      if (cfg.matrixSheet && Array.isArray(cfg.matrixSheet.headers) && cfg.matrixSheet.headers.length) {
+        out.push({
+          name: "Scenario Matrix",
+          headers: cfg.matrixSheet.headers,
+          widths: cfg.matrixSheet.headers.map((h, i) => (i === 0 ? 12 : i === 1 ? 44 : i === 2 ? 10 : 14)),
+          rows: cfg.matrixSheet.rows.map(row => {
+            const o = Object.create(null);
+            cfg.matrixSheet.headers.forEach((hd, i) => { o[hd] = row[i] === undefined || row[i] === null ? "" : row[i]; });
+            return o;
+          })
+        });
+      }
     }
 
     /* a header note so nobody mistakes a scoped export for the master list */
@@ -356,6 +368,7 @@
         { Field: "Hours per day", Value: (model.process && model.process.hoursPerDay) || VSM.schema.HOURS_PER_DAY },
         { Field: "Critical path", Value: r2(model.metrics.currentElapsed / (/hour/i.test(String((model.process && model.process.units) || "")) ? ((model.process && model.process.hoursPerDay) || 8) : 1)) + " days" },
         { Field: "Columns R..X", Value: "Recomputed from this export's scenario, not copied from the source workbook." },
+        { Field: "Scenario Matrix", Value: "Copied verbatim from the imported workbook. In-app rule edits are not yet written back into it." },
         { Field: "Caveat", Value: (model.process && model.process.caveat) || "Durations are estimates." }
       ]
     });

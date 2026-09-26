@@ -509,6 +509,13 @@
       ["Removable", fmt(d.excess) + " " + units().abbr + (d.current ? " (" + pct(d.excess / d.current) + ")" : "")],
       ["Float", n.critical ? "0 (critical path)" : fmt(n.cur.float) + " " + units().abbr]
     ];
+    /* Why this row is in the current scenario - the lowest-friction path to
+       explainability. Prefers the workbook's own TriggerExplanation when a
+       future import carries one; falls back to describing the rule. */
+    if (n.act.when !== undefined) {
+      rows.push(["Included when", esc(n.act.triggerExplanation
+        || VSM.rules.describe(n.act.when, data.scenario.attributes, namedRules()))]);
+    }
     if (n.hasHandoff) rows.push(["Handoff", n.handoffsIn.map(x => esc(x.fromTeam.label) + " → " + esc(x.toTeam.label) + (x.crossOrg ? " (cross-org)" : "") + (x.explicit ? " (declared)" : "")).join("<br>")]);
     if (d.overrideNote) rows.push(["Override", esc(d.overrideNote)]);
     return "<div class='tt-title'><span class='tt-code' style='background:" + safeColor(n.familyDef.optimal) + "'>" + esc(n.code) + "</span>" + esc(n.name) + "</div>" +

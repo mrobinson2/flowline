@@ -1,3 +1,35 @@
+# Flowline 1.2.0
+
+Prepared 25 September 2026 from 1.1.0. The first slice of the specification gap-closure plan (`docs/superpowers/plans/2026-09-25-spec-gap-closure.md`): two explainability additions on the chart, and two import/export honesty fixes. Each landed test-first, and the branch had a whole-diff review before merge.
+
+## Added
+
+1. **The hover tooltip says why a row is in the scenario.** Conditional activities gain an `Included when` line — the workbook's own trigger explanation when a future import carries one, otherwise the rule described in the sidebar's vocabulary (`privacyReview (Data Privacy Review = on)`). Unconditional rows are unchanged. This is the lowest-friction slice of the explainability work; the full included/excluded drawer is a later phase.
+
+2. **Bridged dependencies are visible.** When a scenario excludes a step, the scheduler has always re-linked its neighbours so chains stay intact — but the chart drew that bridge exactly like a declared link. Bridged links now carry `bridged` and `via` on the model, draw dashed, and carry a native tooltip naming what they cross: *"Bridged through Landing zone & policy assignment (excluded by the scenario)"*. Inline attributes, so PNG and SVG exports keep both. Reviewers can now see a dependency was preserved rather than dropped.
+
+## Fixed
+
+3. **A blank current-time pair no longer imports as a silent zero.** A Task List row with both Current Lead and Current Cycle empty read as a zero-duration step with nothing said — the exact shape of a hardware line waiting on estimates, and a scenario including it understated its lead time by the whole task. The importer now warns per row, counts them (`missingEstimates` in the report and the import summary), and flags the activity (`noEstimate`) so the UI can keep saying so. Blank cells were already distinguished from non-numeric text; this closes the both-blank case.
+
+4. **The Scenario Matrix survives the round trip.** The importer consumed the matrix into per-activity rules and dropped the sheet, so exporting and re-importing a tailored workbook silently stripped every task's tailoring back to the Applies When phrases. The sheet is now retained verbatim on the scenario and written back by the Task List export, with an Export Notes line stating that in-app rule edits are not yet synced into it (the admin editor, a later phase, owns that).
+
+5. **Bridge annotations no longer rebuild the name map per link** (review finding). The first build of item 2 constructed an id→name map over every activity once per bridged link — O(links × activities), the same scan class 1.0.3 finding 16 removed from the importer. Drawing 6,000 bridged links took 2.3 seconds and grew 17x for 4x the input; the map is built once per draw now, and a timing regression holds it.
+
+## Validation
+
+Executed with Node v22:
+
+```text
+node test/run-tests.js       204 passed, 0 failed
+node test/regressions.js     64 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (431 KB)
+```
+
+Items 1 and 2 were additionally verified in Chromium against the shipped sample data: the tooltip line appears on conditional rows only, in both themes; the *Expand Capacity* preset shows all 8 bridged links dashed and titled, and the serialized SVG keeps both attributes.
+
+---
+
 # Flowline 1.1.0
 
 Prepared 25 September 2026 from 1.0.3. 1.0 answers "how long does this process take and where could time come out?". 1.1 adds "and where is THIS project, right now?" — the same data and chart, plus a status per activity, an executive tracker view, structure editing in the app, and a spreadsheet round trip that includes pasting straight from Excel. The design brief is `docs/DESIGN-1.1.md`.
