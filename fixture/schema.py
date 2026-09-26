@@ -87,7 +87,35 @@ ASSUMPTION_COLUMNS = ["Step Type (Lean)", "Lead Time Reduction Factor", "Cycle T
 # a discovery phase). Profiles declare a subset of toggles and stay silent on
 # the rest, which is what lets a modifier ride on top of any profile.
 # ---------------------------------------------------------------------------
-TOGGLE_COLUMNS = ["Toggle ID", "Group", "Label", "Type", "Options", "Default", "Implies", "Help"]
+TOGGLE_COLUMNS = ["Toggle ID", "Group", "Label", "Type", "Options", "Default", "Implies", "Help",
+                  "Section", "Shown When", "Derived", "Derivation"]
+
+# Variables-sheet columns per toggle: (Section, Shown When, Derived, Derivation).
+# Sections map onto the six-section wizard; rfi/rfp/poc only show once a
+# discovery phase exists; drRequired is marked derived from the service tier.
+TOGGLE_EXTRAS = {
+    "workType": (1, "Always", "", ""), "discovery": (1, "Always", "", ""),
+    "rfi": (3, "discovery = true", "", ""), "rfp": (3, "discovery = true", "", ""),
+    "poc": (3, "discovery = true", "", ""),
+    "newVendor": (5, "Always", "", ""), "hardware": (5, "Always", "", ""),
+    "newLicense": (5, "Always", "", ""),
+    "genAI": (2, "Always", "", ""), "pavedRoad": (3, "Always", "", ""),
+    "newService": (3, "Always", "", ""), "dataMigration": (2, "Always", "", ""),
+    "tier": (4, "Always", "", ""), "dataClass": (4, "Always", "", ""),
+    "internetFacing": (4, "Always", "", ""),
+    "drRequired": (4, "Always", "Yes", 'tier IN ["Tier 0", "Tier 1", "Tier 2", "Tier 3"]'),
+}
+
+# Named rules: write hard logic once, reference it from any Include Expression.
+RULE_COLUMNS = ["Rule ID", "Expression", "Means", "Why It Exists"]
+RULES = [
+    ("R_Sourcing", "newVendor = true OR hardware = true OR newLicense = true",
+     "any commercial sourcing is involved", "TPRM, contracting and purchasing all hang off this one fact"),
+    ("R_SelectionNeeded", "rfi = true OR rfp = true OR poc = true",
+     "a product selection route is in play", "keeps the discovery gates on one switch instead of three"),
+    ("R_TopTier", 'tier IN ["Tier 0", "Tier 1"]',
+     "the top service tiers", "drives the deeper resilience and security scrutiny"),
+]
 
 # id, group, label, type, options, default, implies, help
 TOGGLES = [

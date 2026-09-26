@@ -76,6 +76,13 @@ function section(t) { results.push("\n" + t); }
     eq("optimized lead 2243.8 h", t.leadOptimal, 2243.8, 0.05);
     eq("optimized cycle 523.8 h", t.cycleOptimal, 523.8, 0.05);
     eq("flow efficiency 10.0%", t.flowEfficiency, 10.0, 0.05);
+    /* the rule layer the v5-spec phases added: a Rules sheet, per-task
+       Include Expressions on the AI-governance rows, and a governed gate */
+    ok("fixture Rules sheet compiled", !!(res.scenario.rules && res.scenario.rules.R_Sourcing),
+      "R_Sourcing missing from " + JSON.stringify(Object.keys(res.scenario.rules || {})));
+    const explained = res.process.activities.filter(a => a.triggerExplanation).length;
+    ok("fixture AI tasks carry an expression + explanation (" + explained + ")", explained >= 4 && explained <= 14);
+    ok("at least one gate is Governed", res.process.activities.some(a => a.canOverride === "governed"));
   } else {
     results.push("  (real workbook: counts not asserted)  " + JSON.stringify(c));
   }
