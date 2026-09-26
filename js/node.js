@@ -22,6 +22,7 @@ require("./registry.js");
 require("./units.js");
 require("./schema.js");
 require("./rules.js");
+require("./expr.js");
 require("./validate.js");
 require("./schedule.js");
 require("./progress.js");
