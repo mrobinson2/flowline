@@ -28,7 +28,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.2.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.2.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.3.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.3.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 

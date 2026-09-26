@@ -1,3 +1,48 @@
+# Flowline 1.3.0
+
+Prepared 26 September 2026 from 1.2.0. The heart of the specification gap-closure program (plans in `docs/superpowers/plans/`): the workbook gains a real rule language, the engine starts deciding what the user should not be asked, and the sidebar becomes a six-section interview. Every change landed test-first; the branch had a whole-diff review before merge; and the shipped sample's default map was asserted row-for-row identical — 39 activities, 198 days — across two vocabulary rewrites, so nothing anyone bookmarked moved.
+
+## Added
+
+### The expression layer (Phase 1)
+
+1. **A text rule language for the workbook** (`js/expr.js`). An `Include Expression` column on the Task List compiles to the same JSON rules the engine has always evaluated: `R_ProdBound AND (ServiceTier IN [Tier0, Tier1] OR InboundInternet = true)`. Operators `=`, `!=`, `IN`, `NOT IN`, `INCLUDES`, `INTERSECTS`; `AND`/`OR`/`NOT` with parentheses; `R_`-prefixed references to named rules. Compiled, never eval'd, with 1-based column numbers on every error. Keywords are strict uppercase — deliberately: a case-insensitive `AND` would silently parse the unquoted value in `workType = Lift and shift` as `"Lift" AND "shift"`, a wrong rule with no error, and a wrong rule with no error is the one thing a governance tool must never produce. Expressions are type-checked against the toggle vocabulary with did-you-mean (`Hostng` → `HostingTarget`; `=` on a multi-select suggests `INCLUDES`), and `print()` renders any rule back as canonical text.
+
+2. **A `Rules` sheet** — write hard logic once (`R_Sourcing`, `R_SelectionNeeded`), reference it from any expression, keep the prose (`Means`, `Why It Exists`) beside it. Forward references resolve; reference loops are validation errors. The sheet round-trips through export verbatim, like the Scenario Matrix does since 1.2.0.
+
+3. **Per-task precedence**: Include Expression beats the Scenario Matrix beats the Applies When phrase; a task with both an expression and a matrix row warns by name and the expression wins for inclusion while the matrix's duration multipliers still apply; a broken expression warns with its column and falls back rather than silently excluding the task. New Task List columns `Rule ID`, `Trigger Explanation` (the hover tooltip prefers it), `Default Included`, `Can Override`, `Rule Priority`; the Toggles sheet gains `Section`, `Shown When`, `Derived`, `Derivation`, `Required`, `Override Requires Reason`, `Audit Relevant` and answers to the name `Variables`.
+
+### The derivation engine (Phase 2)
+
+4. **The user describes the workload; the engine decides the work** (`js/derive.js`). Attributes marked `derived` compute in declaration order — booleans from a rule, enums from ordered cases — with provenance: every chip cites the specific answers that produced it (*Because: Service tier = Tier 3, Pattern conforms = Yes*), never generic text. Overrides are sticky (they win over the derivation on every recompute until cleared), are badged, and demand a recorded reason where the data says so. A forward reference between derivations is a validation error, which is what makes cycles impossible rather than merely detected. A workbook whose `Derivation` column is prose keeps it as documentation with a warning; one that parses as the expression grammar becomes live engine logic.
+
+5. **The §8.5 dissolution.** `pilotPoc` and `privacyReview` — the two toggles that asked the user to perform a derivation in their head — are gone. In their place: `lifecycleStage` + `productionIncluded`, `dataScope` (describe the data; `regulatedData` derives and the privacy work follows), and **`serviceTier`**, the specification's single largest named gap, driving derived `drRequired`, `formalDrTestRequired`, `highAvailability`, `support24x7` and `performanceValidationRequired`. The architecture lane (Fast / Standard / Custom) and the selection route (evaluation / RFP / RFI, with PoC variants) derive from pattern facts and selection facts. Named rule ids did not change, so no activity was touched; derived defaults equal the shipped defaults, so a caller that never passes attribute definitions still gets the 1.1 map.
+
+### The six-section sidebar (Phase 3)
+
+6. **The sidebar is an interview now, not a wall of switches.** Six collapsible sections — what are you doing, where will it run, is it standard, what data and risk, what external dependencies, who builds and operates it — each with a completion dot (● answered · ◐ a required answer missing, the tier saying "Not yet determined" counts · ○ untouched). Booleans are explicit Yes/No pairs (a bare switch is ambiguous under a negatively-phrased question); a single choice past six options becomes a dropdown; a control that only applies in context (`Shown When`) stays hidden until its condition holds and remembers its answer across hide and show — hidden values are kept, not evaluated.
+
+7. **The vocabulary earns its splits.** Bare "Cloud" is retired: Azure, AWS, GCP, on-premises, SaaS-vendor, hybrid and existing-platform are distinct, so an AWS workload keeps the generic cloud work and no longer fires the Azure-specific landing-zone rows. AI and Generative AI are separate answers, the GenAI cost and policy questions disclosing only when relevant. Sourcing grows from two switches to the facts that actually differ — a third party involved, new versus existing vendor, license, SOW, data access, people access — so the common real case (an existing vendor's people need access: onboarding and risk assessment, but no new-vendor contracting and no product selection) finally expresses. Identity is its own group; the network group splits inbound exposure (WAF and the exposure review) from outbound dependency (proxy allowlisting), which were unrelated consequences sharing one chip.
+
+## Fixed
+
+8. **Saved browser state survives a vocabulary change.** Startup merged saved answers blindly while only the linked-folder path filtered them, so a retired enum value evaluated as a ghost — every rule reading it went false and rows vanished with no error. Both paths now share one filter: keep what still applies, default the rest, drop the orphans.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     74 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (499 KB)
+```
+
+Browser-verified in Chromium against the shipped sample: the six sections with dots and disclosure behave as described; the derived chips explain themselves, enforce the override reason, survive a tier change and clear cleanly; describing internal-only data removes the privacy work; and the default map is the same 39 rows it was in 1.1.0.
+
+---
+
 # Flowline 1.2.0
 
 Prepared 25 September 2026 from 1.1.0. The first slice of the specification gap-closure plan (`docs/superpowers/plans/2026-09-25-spec-gap-closure.md`): two explainability additions on the chart, and two import/export honesty fixes. Each landed test-first, and the branch had a whole-diff review before merge.
