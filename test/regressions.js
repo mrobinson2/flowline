@@ -1001,5 +1001,49 @@ function form(extra = {}) {
     assert.equal(forced.derived.overridden.drRequired.reason, "regulator says so");
   });
 
+  await test("1.3.0: derivation shape, option membership and forward references validate", () => {
+    const P = { units: "hours", activities: [task("x")] };
+    const T = clone(shipped.taxonomy);
+    const run = attrs => V.validate.run(P, T, { attributes: attrs, rules: {} });
+    const tier = { id: "tier", label: "Tier", type: "enum", default: "t0",
+      options: [{ value: "t0" }, { value: "t1" }] };
+
+    /* good: the Task 1 shape validates clean */
+    const good = run([tier,
+      { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } } },
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }, { value: "fast" }],
+        derived: true, derive: { cases: [{ when: { dr: true }, value: "std" }], default: "fast" } }]);
+    assert.equal(good.errors.length, 0, JSON.stringify(good.errors));
+
+    /* forward reference: A reads B, B declared later */
+    const fwd = run([tier,
+      { id: "a", label: "A", type: "boolean", default: false, derived: true, derive: { when: { b: true } } },
+      { id: "b", label: "B", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } } }]);
+    assert.ok(fwd.errors.some(e => e.includes("'a'") && e.includes("'b'")), JSON.stringify(fwd.errors));
+
+    /* a case value outside the options */
+    const badCase = run([tier,
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }],
+        derived: true, derive: { cases: [{ when: { tier: "t0" }, value: "warp" }], default: "std" } }]);
+    assert.ok(badCase.errors.some(e => /warp/.test(e)), JSON.stringify(badCase.errors));
+
+    /* a default outside the options */
+    const badDefault = run([tier,
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }],
+        derived: true, derive: { cases: [{ when: { tier: "t0" }, value: "std" }], default: "warp" } }]);
+    assert.ok(badDefault.errors.some(e => /warp/.test(e)), JSON.stringify(badDefault.errors));
+
+    /* a derive rule naming a ghost attribute goes through checkRule */
+    const ghost = run([tier,
+      { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { teir: "t0" } } }]);
+    assert.ok(ghost.errors.some(e => /teir/.test(e)), JSON.stringify(ghost.errors));
+
+    /* derive on a multi is refused */
+    const multi = run([tier,
+      { id: "m", label: "M", type: "multi", default: [], options: [{ value: "a" }],
+        derived: true, derive: { when: { tier: "t0" } } }]);
+    assert.ok(multi.errors.some(e => /multi/.test(e)), JSON.stringify(multi.errors));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

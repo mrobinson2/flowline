@@ -215,6 +215,60 @@ VSM.validate = (function () {
     scenarioCfg.attributes.forEach(a => { if (a.enabledWhen !== undefined) checkRule(a.enabledWhen, "scenario attribute '" + a.id + "' enabledWhen", []); });
     scenarioCfg.attributes.forEach(a => { if (a.shownWhen !== undefined) checkRule(a.shownWhen, "scenario attribute '" + a.id + "' shownWhen", []); });
 
+    /* ------------------------------------------------- derived attributes
+       Derivations run in declaration order (js/derive.js), so a derivation
+       may reference authored attributes anywhere and derived attributes
+       declared ABOVE it only. Enforcing that here is what makes derivation
+       cycles impossible rather than merely detected. */
+    (function () {
+      const order = new Map(scenarioCfg.attributes.map((a, i) => [a && a.id, i]));
+      const derivedIdx = new Map(scenarioCfg.attributes.filter(a => a && a.derived).map(a => [a.id, order.get(a.id)]));
+      function ruleAttrs(rule, out, depth) {
+        const d = depth || 0;
+        if (d > 64 || rule === undefined || rule === null || typeof rule === "boolean") return out;
+        if (typeof rule === "string") { const t = scenarioCfg.rules || {}; if (Object.prototype.hasOwnProperty.call(t, rule)) ruleAttrs(t[rule], out, d + 1); return out; }
+        if (Array.isArray(rule)) { rule.forEach(r => ruleAttrs(r, out, d + 1)); return out; }
+        if (typeof rule !== "object") return out;
+        Object.keys(rule).forEach(k => {
+          if (k === "all" || k === "any") { (rule[k] || []).forEach(r => ruleAttrs(r, out, d + 1)); return; }
+          if (k === "not") { ruleAttrs(rule[k], out, d + 1); return; }
+          out.push(k);
+        });
+        return out;
+      }
+      scenarioCfg.attributes.forEach(a => {
+        if (!a || !a.derived) return;
+        const at = "scenario attribute '" + a.id + "'";
+        if (!a.derive || typeof a.derive !== "object") { err(at + ": derived attributes need a \"derive\" block ({ when } or { cases, default })."); return; }
+        if (a.type === "multi") { err(at + ": a multi-select cannot be derived."); return; }
+        const options = (a.options || []).map(o => o.value);
+        const rulesToCheck = [];
+        if (a.derive.cases) {
+          if (!Array.isArray(a.derive.cases) || !a.derive.cases.length) { err(at + ": derive.cases must be a non-empty array."); return; }
+          a.derive.cases.forEach((c, i) => {
+            if (!c || typeof c !== "object") { err(at + ": derive.cases[" + i + "] must be an object with when and value."); return; }
+            rulesToCheck.push([c.when, at + " derive.cases[" + i + "]"]);
+            if (a.type === "enum" && !options.includes(c.value)) err(at + ": derive case value " + JSON.stringify(c.value) + " is not one of the options (" + options.join(", ") + ").");
+          });
+          const def = a.derive.default !== undefined ? a.derive.default : a.default;
+          if (a.type === "enum" && !options.includes(def)) err(at + ": derive default " + JSON.stringify(def) + " is not one of the options (" + options.join(", ") + ").");
+        } else {
+          if (a.derive.when === undefined) { err(at + ": a boolean derivation needs derive.when."); return; }
+          rulesToCheck.push([a.derive.when, at + " derive.when"]);
+        }
+        rulesToCheck.forEach(([rule, where]) => {
+          checkRule(rule, where, []);
+          ruleAttrs(rule, [], 0).forEach(ref => {
+            if (!derivedIdx.has(ref)) return;                          // authored attrs may sit anywhere
+            if (derivedIdx.get(ref) >= order.get(a.id)) err(where + ": references derived attribute '" + ref + "', which is declared at or below '" + a.id + "'. Derivations run in declaration order; move '" + ref + "' above.");
+          });
+        });
+      });
+      scenarioCfg.attributes.forEach(a => {
+        if (a && a.overrideRequiresReason && !a.derived) warn("scenario attribute '" + a.id + "': overrideRequiresReason only applies to derived attributes.");
+      });
+    })();
+
     /* ---------------------------------------------------- presets */
     (scenarioCfg.presets || []).forEach(p => {
       if (!p || typeof p.label !== "string") { err("preset: every preset needs a label."); return; }
