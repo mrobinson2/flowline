@@ -941,5 +941,43 @@ function form(extra = {}) {
     assert.equal(V.validate.run(r2.process, r2.taxonomy, r2.scenario).errors.length, 0);
   });
 
+  await test("1.3.0: derivation engine computes in order with provenance and sticky overrides", () => {
+    const defs = [
+      { id: "serviceTier", label: "Service tier", type: "enum", default: "Tier3",
+        options: ["Tier0", "Tier1", "Tier2", "Tier3", "Tier4"].map(v => ({ value: v, label: v })) },
+      { id: "productionIncluded", label: "Production deployment included", type: "boolean", default: true },
+      { id: "drRequired", label: "DR required", type: "boolean", default: false, derived: true,
+        derive: { when: { all: [{ productionIncluded: true }, { serviceTier: { in: ["Tier0", "Tier1", "Tier2", "Tier3"] } }] } } },
+      { id: "lane", label: "Architecture route", type: "enum", default: "standard", derived: true,
+        overrideRequiresReason: true,
+        derive: { cases: [
+          { when: { drRequired: true }, value: "standard" },
+          { when: true, value: "fast" }
+        ], default: "standard" } }
+    ];
+    const s = V.rules.defaults(defs);
+    const r = V.derive.compute(defs, s, {}, null);
+    assert.equal(r.scenario.drRequired, true);
+    assert.equal(r.scenario.lane, "standard");            // sees the EARLIER derived value
+    assert.deepEqual(r.derived, ["drRequired", "lane"]);
+    const because = r.provenance.drRequired.because;
+    assert.ok(because.some(b => b.attr === "serviceTier" && b.value === "Tier3"), JSON.stringify(because));
+    assert.ok(because.some(b => b.attr === "productionIncluded" && b.value === true));
+    /* boolean false explains itself too */
+    const off = V.derive.compute(defs, Object.assign({}, s, { serviceTier: "Tier4" }), {}, null);
+    assert.equal(off.scenario.drRequired, false);
+    assert.ok(off.provenance.drRequired.because.some(b => b.attr === "serviceTier" && b.satisfied === false),
+      JSON.stringify(off.provenance.drRequired.because));
+    /* sticky override survives an input change and reports itself */
+    const ov = { lane: { value: "fast", reason: "pattern conforms, board approved" } };
+    const r2 = V.derive.compute(defs, Object.assign({}, s, { serviceTier: "Tier0" }), {}, ov);
+    assert.equal(r2.scenario.lane, "fast");
+    assert.equal(r2.overridden.lane.reason, "pattern conforms, board approved");
+    /* an override naming an authored attribute is ignored, not forced */
+    const r3 = V.derive.compute(defs, s, {}, { serviceTier: { value: "Tier0", reason: "x" } });
+    assert.equal(r3.scenario.serviceTier, "Tier3");
+    assert.equal(r3.overridden.serviceTier.ignored, true);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
