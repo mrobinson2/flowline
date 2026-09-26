@@ -239,7 +239,14 @@ VSM.validate = (function () {
       scenarioCfg.attributes.forEach(a => {
         if (!a || !a.derived) return;
         const at = "scenario attribute '" + a.id + "'";
-        if (!a.derive || typeof a.derive !== "object") { err(at + ": derived attributes need a \"derive\" block ({ when } or { cases, default })."); return; }
+        /* A derived attribute whose logic exists only as prose (a workbook's
+           Derivation column that the expression grammar cannot read) is
+           legitimate authoring - the engine just cannot compute it yet, so
+           the value stays at its default. Say so; do not refuse the file. */
+        if (!a.derive || typeof a.derive !== "object") {
+          warn(at + ": marked Derived but its derivation is prose only, so the engine leaves it at its default" + (a.derivation ? " (\"" + a.derivation + "\")" : "") + ".");
+          return;
+        }
         if (a.type === "multi") { err(at + ": a multi-select cannot be derived."); return; }
         const options = (a.options || []).map(o => o.value);
         const rulesToCheck = [];

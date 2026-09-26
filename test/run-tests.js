@@ -83,6 +83,8 @@ function section(t) { results.push("\n" + t); }
     const explained = res.process.activities.filter(a => a.triggerExplanation).length;
     ok("fixture AI tasks carry an expression + explanation (" + explained + ")", explained >= 4 && explained <= 14);
     ok("at least one gate is Governed", res.process.activities.some(a => a.canOverride === "governed"));
+    const drAttr = res.scenario.attributes.find(a => a.id === "drRequired");
+    ok("fixture drRequired derivation compiled to engine logic", !!(drAttr && drAttr.derive && drAttr.derive.when));
   } else {
     results.push("  (real workbook: counts not asserted)  " + JSON.stringify(c));
   }

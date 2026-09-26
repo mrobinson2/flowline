@@ -503,6 +503,16 @@
         try { t.shownWhen = VSM.expr.compile(sw, toggles, []).rule; }
         catch (e) { report.warnings.push("Toggle '" + t.id + "': Shown When: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". The control stays visible."); }
       });
+      /* A Derivation cell that happens to parse as the expression grammar
+         becomes live engine logic; anything else stays prose on the
+         attribute (the spec's Derivation column is plain language first).
+         Only booleans: an enum derivation needs ordered cases, which prose
+         cannot carry. Silent on failure by design - prose is not an error. */
+      toggles.forEach(t => {
+        if (!t.derived || !t.derivation || t.type !== "boolean") return;
+        try { t.derive = { when: VSM.expr.compile(t.derivation, toggles, []).rule }; }
+        catch (e) { /* prose derivation: documented, not computed */ }
+      });
     }
     const profiles = toggles ? readProfiles(found.profiles, toggles, report) : null;
     const matrix = toggles ? readMatrix(found.matrix, toggles, report) : null;
@@ -833,6 +843,7 @@
           if (t.diagnosticOnly) a.diagnosticOnly = true;
           if (t.derived) a.derived = true;
           if (t.derivation) a.derivation = t.derivation;
+          if (t.derive) a.derive = t.derive;
           if (t.required) a.required = true;
           if (t.overrideRequiresReason) a.overrideRequiresReason = true;
           if (t.auditRelevant) a.auditRelevant = true;
