@@ -373,7 +373,9 @@ function section(t) { results.push("\n" + t); }
   /* A..Y from the source workbook, plus the Stage rollup as column Z. The
      original 25 stay in their exact positions - asserted below - so the
      source workbook's own tooling still reads the file. */
-  eq("Task List has all 26 columns (A..Y + Stage)", taskSheet.headers.length, 26);
+  eq("Task List has all 32 columns (A..Y + Stage + rule columns)", taskSheet.headers.length, 32);
+  eq("columns A..Y positions unchanged by the rule columns",
+     taskSheet.headers.slice(0, 25).join("|"), want.slice(0, 25).join("|"));
   ok("headers match the schema exactly, in order", JSON.stringify(taskSheet.headers) === JSON.stringify(want),
     JSON.stringify(taskSheet.headers.filter((h, i) => h !== want[i])));
   eq("one row per rendered task", taskSheet.rows.length, em.nodes.length);
