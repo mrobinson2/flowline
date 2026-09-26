@@ -26,6 +26,11 @@ bottom:
   governed gates say so and cannot be switched off. An assumptions banner
   under the metrics lists missing estimates, overrides in force and an
   undecided service tier.
+* **Saved scenarios** — name and save the current answer set, load it back
+  (the engine rebuilds and a test holds the result identical), compare two
+  ("what does SaaS over COTS actually save?" answered in tasks and days),
+  and carry them through the JSON export. The saved set is also what the
+  admin mode's impact preview replays.
 * **Derived by the engine** — chips for the values nobody is asked: the
   architecture route, the selection route, whether DR or a privacy review is
   required. Each cites the answers that produced it, and can be overridden

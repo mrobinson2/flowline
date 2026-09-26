@@ -297,3 +297,11 @@ body.metrics-hidden #metrics { display: none; }
 #assumptions.banner { position: relative; margin: 6px 0; padding: 8px 34px 8px 10px; border: 1px solid #F59E0B; border-radius: 8px; background: rgba(245,158,11,0.08); font-size: 12px; }
 #assumptions .banner-item { margin: 2px 0; }
 #assumptions .icon { position: absolute; top: 6px; right: 8px; }
+
+/* ---- saved scenarios ---- */
+#saved-runs { margin-top: 10px; }
+.run-save { display: flex; gap: 6px; margin: 4px 0 6px; }
+.run-save .input { flex: 1; min-width: 0; }
+.run-row { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 3px 0; border-bottom: 1px solid rgba(148,163,184,0.12); }
+.run-row .run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-row em { opacity: 0.6; font-style: normal; font-size: 11px; }

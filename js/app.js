@@ -266,6 +266,7 @@
     renderWasteChips();
     renderDerived();
     renderSummary();
+    renderRuns();
     renderBanner();
     if (!$("#why-drawer").hidden) renderDrawer();
     renderChart();
@@ -537,6 +538,85 @@
     });
     if (!rows.length) body.appendChild(h("p", { class: "hint" }, "Nothing here under the current scenario."));
     box.appendChild(body);
+  }
+
+  /* ------------------------------------------------------------ saved runs
+     (spec §2.5 / §4.9): save the current scenario under a name, reload it -
+     the engine rebuilds and the run asserts what it produced - and compare
+     two, which is the "what does SaaS over COTS actually save" question. */
+  function renderRuns() {
+    const box = $("#saved-runs");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(h("div", { class: "control-group" }, "Saved scenarios"));
+    const name = h("input", { class: "input", placeholder: "Name this scenario…" });
+    const saveBtn = h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+      if (!model) return;
+      const run = VSM.runs.record(model, state, name.value.trim() || "unnamed scenario");
+      try { VSM.runs.save(run); } catch (e) { toast("Not saved: " + e.message, true); return; }
+      name.value = "";
+      renderRuns();
+      toast("Saved \u201c" + run.name + "\u201d (" + run.totals.tasks + " tasks, " + fmt(run.totals.elapsed) + " " + units().abbr + ")");
+    } }, "Save");
+    box.appendChild(h("div", { class: "run-save" }, name, saveBtn));
+    VSM.runs.list().slice().reverse().forEach(r => {
+      const row = h("div", { class: "run-row" },
+        h("span", { class: "run-name", title: r.createdUtc }, r.name),
+        h("em", null, r.totals.tasks + " · " + fmt(r.totals.elapsed) + units().abbr),
+        h("button", { type: "button", class: "ghost dc-btn", onclick: () => loadRun(r) }, "Load"),
+        h("button", { type: "button", class: "ghost dc-btn", onclick: () => compareRun(r) }, "Compare"),
+        h("button", { type: "button", class: "icon", title: "Delete", onclick: () => {
+          try { VSM.runs.remove(r.runId); } catch (e) { toast(e.message, true); return; }
+          renderRuns();
+        } }, "\u00d7"));
+      box.appendChild(row);
+    });
+  }
+  function loadRun(r) {
+    state.scenario = mergeScenario(data.scenario.attributes, r.answers);
+    state.overrides = Object.assign({}, r.overrides);
+    state.taskOverrides = Object.assign({}, r.taskOverrides);
+    state.profile = null;
+    saveState();
+    buildScenarioControls();
+    rebuild();
+    toast("Loaded \u201c" + r.name + "\u201d");
+  }
+  function compareRun(r) {
+    if (!model || !document.body) return;
+    const now = VSM.runs.record(model, state, "current scenario");
+    const df = VSM.runs.diff(r, now);
+    const overlay = h("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
+    const done = () => overlay.remove();
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(); });
+    const body = h("div", { class: "overlay-body" });
+    const U = units();
+    body.appendChild(h("p", null, "\u201c" + r.name + "\u201d \u2192 current: " +
+      (df.elapsedDelta >= 0 ? "+" : "") + fmt(df.elapsedDelta) + " " + U.abbr + " elapsed, " +
+      (df.gatesDelta >= 0 ? "+" : "") + df.gatesDelta + " gates."));
+    const nameOf = id => { const x = (data.process.activities || []).find(q => q.id === id); return x ? x.name : id; };
+    const listBlock = (title, ids) => {
+      if (!ids.length) return;
+      body.appendChild(h("p", { class: "warn-head" }, title + " (" + ids.length + ")"));
+      const ul = h("ul");
+      ids.slice(0, 12).forEach(id => ul.appendChild(h("li", null, nameOf(id))));
+      if (ids.length > 12) ul.appendChild(h("li", null, "\u2026 and " + (ids.length - 12) + " more"));
+      body.appendChild(ul);
+    };
+    listBlock("Only in the current scenario", df.addedTasks);
+    listBlock("Only in \u201c" + r.name + "\u201d", df.removedTasks);
+    if (df.changedAnswers.length) {
+      body.appendChild(h("p", { class: "warn-head" }, "Changed answers"));
+      const ul = h("ul");
+      df.changedAnswers.slice(0, 12).forEach(c => ul.appendChild(h("li", null, c.id + ": " + JSON.stringify(c.from) + " \u2192 " + JSON.stringify(c.to))));
+      body.appendChild(ul);
+    }
+    overlay.appendChild(h("div", { class: "overlay-box" },
+      h("div", { class: "overlay-head" }, h("h2", null, "Compare scenarios"),
+        h("button", { class: "icon", type: "button", onclick: done }, "\u00d7")),
+      body,
+      h("div", { class: "overlay-foot" }, h("button", { class: "primary", type: "button", onclick: done }, "Close"))));
+    document.body.appendChild(overlay);
   }
 
   /* ------------------------------------------------------------ assumptions
@@ -1141,7 +1221,7 @@
       else if (kind === "png2x") { await VSM.exporter.exportPNG(exportTarget(), name + "-3840x2160.png", 2); toast("PNG exported (3840×2160)"); }
       else if (kind === "svg") { VSM.exporter.exportSVG(exportTarget(), name + ".svg"); toast("SVG exported"); }
       else if (kind === "copy") { await VSM.exporter.copyPNG(exportTarget(), 2); toast("Copied to clipboard as PNG"); }
-      else if (kind === "json") { VSM.exporter.exportJSON({ process: data.process, taxonomy: data.taxonomy, scenario: data.scenario }, slug(data.process.title) + ".json"); toast("JSON exported"); }
+      else if (kind === "json") { VSM.exporter.exportJSON({ process: data.process, taxonomy: data.taxonomy, scenario: data.scenario, runs: VSM.runs.list() }, slug(data.process.title) + ".json"); toast("JSON exported (saved scenarios included)"); }
       else if (kind === "xlsx") { VSM.exportWorkbook.exportXLSX(model, exportOpts(), slug(data.process.title) + "-value-stream.xlsx"); toast("Excel workbook exported in the Task List format"); }
       else if (kind === "csv") { VSM.exportWorkbook.exportCSV(model, exportOpts(), slug(data.process.title) + "-task-list.csv"); toast("CSV exported in the Task List format"); }
       else if (kind === "simple") { VSM.table.exportXLSX(data.process, slug(data.process.title) + "-activities.xlsx"); toast("Editable workbook exported — change it in Excel and Import it straight back"); }
@@ -1303,6 +1383,10 @@
       try {
         const obj = JSON.parse(reader.result);
         const override = pinLiveData(readOverride());
+        if (Array.isArray(obj.runs)) {
+          try { VSM.runs.replaceAll(obj.runs); } catch (e2) { toast("Saved scenarios not restored: " + e2.message, true); }
+          delete obj.runs;
+        }
         if (obj.process || obj.taxonomy || obj.scenario) Object.assign(override, obj);
         else if (obj.activities) override.process = obj;
         else if (obj.families) override.taxonomy = obj;
