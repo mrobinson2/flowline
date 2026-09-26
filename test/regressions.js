@@ -1045,5 +1045,33 @@ function form(extra = {}) {
     assert.ok(multi.errors.some(e => /multi/.test(e)), JSON.stringify(multi.errors));
   });
 
+  await test("1.3.0: the dissolved vocabulary keeps the default map identical", () => {
+    /* the shipped default scenario BEFORE the vocabulary change: 39 rows */
+    const OLD_DEFAULT_IDS = ["arch-design","biz-case","cab","cloud-cost-approval","cloud-env-dev","cloud-iac","cloud-iam","cloud-landing-zone","cloud-network","cloud-subscription","code-review","data-class","dba-provision","defect-rework","deploy-prod","dev-build","dr-design","dr-env-cloud","dr-test","go-live","hypercare","intake","intake-triage","kickoff","ops-readiness","pen-test","perf-test","privacy-review","privacy-signoff","qa-env-wait","qa-test","release-window","sast","sec-attest","sec-design-review","sec-findings-rework","sizing","threat-model","uat"];
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    assert.ok(!d.scenario.attributes.some(a => a.id === "pilotPoc" || a.id === "privacyReview"),
+      "the pilotPoc / privacyReview toggles must be dissolved (spec §8.5)");
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    const model = build2();
+    assert.deepEqual(model.nodes.map(n => n.id).sort(), OLD_DEFAULT_IDS, "default map must not change");
+    assert.equal(model.metrics.currentElapsed, 198, "default elapsed must stay 198 days");
+    /* tier drives the DR chain */
+    const t4 = build2({ serviceTier: "Tier 4" });
+    const dropped = OLD_DEFAULT_IDS.filter(x => !t4.nodes.some(n => n.id === x));
+    assert.ok(dropped.length >= 3 && dropped.every(x => /^dr-/.test(x) || x === "dr-test"), JSON.stringify(dropped));
+    /* pattern conformance drives the lane, the lane drives the ARB chain */
+    const std = build2({ patternConforms: false });
+    ["arb", "arb-rework", "sec-design-recheck"].forEach(id =>
+      assert.ok(std.nodes.some(n => n.id === id), id + " should appear on the standard lane"));
+    assert.equal(std.derived.provenance.architectureLane.value, "standard");
+    /* data scope drives privacy: no personal or regulated data, no PIA */
+    const noPii = build2({ dataScope: ["internal-business"] });
+    assert.ok(!noPii.nodes.some(n => n.id === "privacy-review"), "no regulated data, no privacy impact assessment");
+    /* a stale saved state carrying retired ids stays inert */
+    const stale = build2({ pilotPoc: true, privacyReview: false });
+    assert.deepEqual(stale.nodes.map(n => n.id).sort(), OLD_DEFAULT_IDS, "retired ids must be inert");
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
