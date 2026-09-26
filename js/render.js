@@ -242,6 +242,9 @@ VSM.render = (function () {
     const linkMode = disp.links || "all";
     if (linkMode !== "none") {
       const handoffColor = ((model.taxonomy.families || {}).handoff || {}).optimal || "#A855F7";
+      /* id -> name over ALL activities (via names excluded steps, which have no
+         node). Built once, lazily - per-link construction is O(links x activities). */
+      let bridgeNames = null;
       model.links.forEach(lk => {
         if (linkMode === "handoffs" && !lk.handoff) return;
         const a = model.nodeById.get(lk.from), b = model.nodeById.get(lk.to);
@@ -263,8 +266,8 @@ VSM.render = (function () {
         if (lk.bridged) attrs["stroke-dasharray"] = "4 3";
         const p = el("path", attrs, g);
         if (lk.bridged && lk.via && lk.via.length) {
-          const byActId = new Map((model.process.activities || []).map(x => [x.id, x.name || x.id]));
-          const names = lk.via.map(id => byActId.get(id) || id);
+          if (!bridgeNames) bridgeNames = new Map((model.process.activities || []).map(x => [x.id, x.name || x.id]));
+          const names = lk.via.map(id => bridgeNames.get(id) || id);
           el("title", null, p).textContent = "Bridged through " + names.join(", ") + " (excluded by the scenario)";
         }
       });
