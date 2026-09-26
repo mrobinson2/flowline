@@ -144,7 +144,7 @@ The wrapper exists because browsers refuse `fetch()` of a local file opened from
 
 A value stream is not one process. An off-the-shelf SaaS purchase and a greenfield build pioneering three new services do not go through the same steps, and averaging them describes neither.
 
-Flowline models that as one **profile** (a saved set of options for a type of work) plus any number of **modifiers** (individual options such as whether it involves AI or regulated data). A profile declares values for some toggles and stays silent on the rest, so switching profile leaves a modifier it never mentioned exactly where you put it.
+Flowline models that as one **profile** (a saved set of options for a type of work) plus any number of **modifiers** (individual options such as whether it involves AI or regulated data). A profile declares values for some toggles and stays silent on the rest, so switching profile leaves a modifier it never mentioned exactly where you put it. The questions themselves sit in six collapsible sections — what are you doing, where will it run, is it standard, what data and risk, what dependencies, who builds and operates it — each with a completion dot, so describing a workload reads as a short interview rather than a wall of switches.
 
 The model is recomputed from the whole current state every time rather than mutated step by step, so profile-then-modifier gives the identical answer to the other order. A test asserts it.
 
