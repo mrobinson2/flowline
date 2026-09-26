@@ -1268,5 +1268,59 @@ function form(extra = {}) {
     } finally { delete global.localStorage; }
   });
 
+  await test("1.4.0: admin core - references found everywhere, impact replays the run's answers", () => {
+    /* RF#1: one reference of each kind */
+    const syn = {
+      process: { units: "hours", activities: [
+        task("a", { when: { tier: "t0" } }),
+        task("b", { predecessors: ["a"] })
+      ] },
+      taxonomy: clone(shipped.taxonomy),
+      scenario: {
+        attributes: [
+          { id: "tier", label: "Tier", type: "enum", default: "t0", options: [{ value: "t0" }, { value: "t1" }], section: 4 },
+          { id: "gated", label: "Gated", type: "boolean", default: false, shownWhen: { tier: "t0" }, section: 4 },
+          { id: "locked", label: "Locked", type: "boolean", default: false, enabledWhen: { tier: "t0" }, section: 4 },
+          { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } }, section: 4 }
+        ],
+        rules: { topTier: { tier: "t0" } },
+        presets: [{ id: "p1", label: "P1", partial: true, set: { tier: "t1" } }]
+      }
+    };
+    const refs = V.admin.referencesTo(syn, "tier");
+    const kinds = refs.map(r => r.kind).sort();
+    ["activity", "derive", "enabledWhen", "preset", "rule", "shownWhen"].forEach(k =>
+      assert.ok(kinds.includes(k), "missing reference kind " + k + " in " + JSON.stringify(kinds)));
+    assert.equal(V.admin.referencesTo(syn, "nothing-uses-this").length, 0);
+
+    /* RF#2: impact uses each run's own answers */
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+    try {
+      const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+      const answers = V.rules.defaults(d.scenario.attributes);
+      const mk = sc => {
+        const m = V.schedule.build(d.process, d.taxonomy, Object.assign({}, answers, sc), d.scenario.rules, d.scenario.attributes);
+        return V.runs.record(m, { scenario: Object.assign({}, answers, sc), overrides: {}, taskOverrides: {} }, JSON.stringify(sc));
+      };
+      const baseline = mk({});                       // DR present (Tier 3)
+      const tier4 = mk({ serviceTier: "Tier 4" });   // DR already absent
+      const candidate = clone(d);
+      candidate.scenario.rules.drRequired = false;   // the rule change under preview
+      const rows = V.admin.impact(d, candidate, [baseline, tier4]);
+      const rb = rows.find(r => r.runId === baseline.runId);
+      const r4 = rows.find(r => r.runId === tier4.runId);
+      assert.ok(rb.removed.length >= 3 && rb.removed.every(id => /^dr-/.test(id) || id === "dr-test"), JSON.stringify(rb.removed));
+      assert.equal(rb.added.length, 0);
+      assert.equal(r4.removed.length + r4.added.length, 0, "a Tier 4 run must be untouched: " + JSON.stringify(r4));
+      /* versions append and cap */
+      const sc2 = { versions: [] };
+      for (let i = 0; i < 105; i++) V.admin.pushVersion(sc2, { target: "t" + i, before: i, after: i + 1 });
+      assert.equal(sc2.versions.length, 100);
+      assert.equal(sc2.versions[99].target, "t104");
+      assert.ok(sc2.versions[0].ts);
+    } finally { delete global.localStorage; }
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
