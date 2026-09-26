@@ -203,6 +203,17 @@
         help: txt(r.help) || undefined,
         implies: txt(r.implies).split(/\s*[;,]\s*/).map(s => s.trim()).filter(Boolean)
       };
+      /* Variables-sheet columns: wizard section, progressive disclosure, and
+         the derivation flags the later engine phases consume. Shown When is
+         raw text here; it compiles once the whole vocabulary is read. */
+      const yes = v => /^(y|yes|true|1|on)$/i.test(txt(v));
+      if (num(r.section) !== null) t.section = num(r.section);
+      if (txt(r.shownWhen)) t.shownWhenText = txt(r.shownWhen);
+      if (yes(r.derived)) t.derived = true;
+      if (txt(r.derivation)) t.derivation = txt(r.derivation);
+      if (yes(r.required)) t.required = true;
+      if (yes(r.overrideRequiresReason)) t.overrideRequiresReason = true;
+      if (yes(r.auditRelevant)) t.auditRelevant = true;
       if (type === "enum" || type === "multi") {
         if (!optionList.length) { report.warnings.push("Toggle '" + id + "' is a choice but lists no options; treated as a yes/no switch."); t.type = "boolean"; }
         else t.options = optionList.map(v => ({ value: v, label: v }));
@@ -477,10 +488,66 @@
 
     /* ---- tailoring: the three tabs if present, the Applies When phrases if not */
     const toggles = readToggles(found.toggles, report);
+    /* Shown When compiles against the FULL vocabulary, so it runs after every
+       toggle is read. "Always" (and blank) means always visible; "Diagnostic
+       mode only" is a flag the diagnostic view reads, not a rule. A broken
+       expression warns and the control stays visible - hiding a control over
+       a typo would silently freeze its default into every scenario. */
+    if (toggles) {
+      toggles.forEach(t => {
+        if (!t.shownWhenText) return;
+        const sw = t.shownWhenText;
+        delete t.shownWhenText;
+        if (/^always$/i.test(sw)) return;
+        if (/^diagnostic mode only$/i.test(sw)) { t.diagnosticOnly = true; return; }
+        try { t.shownWhen = VSM.expr.compile(sw, toggles, []).rule; }
+        catch (e) { report.warnings.push("Toggle '" + t.id + "': Shown When: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". The control stays visible."); }
+      });
+      /* A Derivation cell that happens to parse as the expression grammar
+         becomes live engine logic; anything else stays prose on the
+         attribute (the spec's Derivation column is plain language first).
+         Only booleans: an enum derivation needs ordered cases, which prose
+         cannot carry. Silent on failure by design - prose is not an error. */
+      toggles.forEach(t => {
+        if (!t.derived || !t.derivation || t.type !== "boolean") return;
+        try { t.derive = { when: VSM.expr.compile(t.derivation, toggles, []).rule }; }
+        catch (e) { /* prose derivation: documented, not computed */ }
+      });
+    }
     const profiles = toggles ? readProfiles(found.profiles, toggles, report) : null;
     const matrix = toggles ? readMatrix(found.matrix, toggles, report) : null;
     if (toggles && !matrix) report.warnings.push("A Toggles tab was found but no usable Scenario Matrix, so no task is tied to any toggle yet.");
     if (!toggles && (found.profiles || found.matrix)) report.warnings.push("Profiles or Scenario Matrix found without a Toggles tab. Toggles defines the vocabulary, so both were ignored.");
+
+    /* ---- named rules from the Rules sheet: write hard logic once, reference
+       it by R_ name from any Include Expression. Two passes so a rule may
+       reference one defined below it; a reference loop is validate.js's job.
+       A broken expression here is an ERROR - a shared rule poisons every
+       task that references it. */
+    const sheetRules = Object.create(null);
+    const ruleMeta = Object.create(null);
+    if (found.rules) {
+      const ruleRows = readSheet(found.rules, S.RULES, report, "Rules");
+      const ruleIds = [];
+      ruleRows.forEach(r => {
+        const rid = txt(r.id);
+        if (!rid) { report.warnings.push("Rules row " + r.__row + " has no Rule ID and was skipped."); return; }
+        if (!/^R_/.test(rid)) { report.errors.push("Rules sheet: rule ids start with R_ ('" + rid + "')."); return; }
+        if (ruleMeta[rid]) { report.warnings.push("Rules sheet: duplicate rule '" + rid + "' was skipped."); return; }
+        ruleMeta[rid] = { expression: txt(r.expression), means: txt(r.means) || undefined, why: txt(r.why) || undefined };
+        ruleIds.push(rid);
+      });
+      ruleIds.forEach(rid => {
+        try {
+          const c = VSM.expr.compile(ruleMeta[rid].expression, toggles || undefined, ruleIds);
+          sheetRules[rid] = c.rule;
+          (c.warnings || []).forEach(w => report.warnings.push("Rules sheet, '" + rid + "': " + w));
+        } catch (e) {
+          report.errors.push("Rules sheet, '" + rid + "': " + e.message + (e.column ? " (column " + e.column + ")" : ""));
+        }
+      });
+    }
+    const sheetRuleIds = Object.keys(sheetRules);
 
     /* ---- scenario switches from the distinct "Applies When" phrases */
     const conditions = new Map();
@@ -563,31 +630,65 @@
       };
       if (waste) a.waste = waste;
       if (noEstimate) a.noEstimate = true;
-      /* The matrix owns inclusion when it exists; the Applies When phrase is
-         then documentation only, kept on the activity for the details panel. */
+
+      /* Include Expression is the richest rule source and wins over the
+         matrix (precedence: expression > matrix > Applies When phrase; the
+         phrase stays display-only wherever either exists). A compile failure
+         is a warning and the task falls back to the next source - a broken
+         cell must never silently exclude a task. Without a Toggles tab the
+         expression compiles unchecked: there is no vocabulary to check
+         against, and validate.js still vets the compiled rule. */
+      let usedExpression = false;
+      const exprText = txt(r.includeExpression);
+      if (exprText) {
+        try {
+          const c = VSM.expr.compile(exprText, toggles || undefined, sheetRuleIds);
+          a.when = c.rule;
+          usedExpression = true;
+          (c.warnings || []).forEach(w => report.warnings.push(id + ": Include Expression: " + w));
+        } catch (e) {
+          report.warnings.push(id + ": Include Expression: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". Falling back to the Scenario Matrix / Applies When rule.");
+        }
+      }
+      if (txt(r.triggerExplanation)) a.triggerExplanation = txt(r.triggerExplanation);
+      const canO = txt(r.canOverride).toLowerCase();
+      if (canO === "yes" || canO === "governed") a.canOverride = canO;
+      else if (canO) report.warnings.push(id + ": Can Override '" + txt(r.canOverride) + "' is not Yes or Governed and was ignored.");
+      if (num(r.rulePriority) !== null) a.rulePriority = num(r.rulePriority);
+      if (txt(r.defaultIncluded)) a.defaultIncluded = /^(y|yes|true|1)$/i.test(txt(r.defaultIncluded));
+
+      /* The matrix owns inclusion when it exists and no expression claimed
+         the row; its duration MULTIPLIERS apply either way, because how long
+         a step takes is orthogonal to whether it is included. */
       if (matrix) {
         const entry = matrix.get(id);
         if (!entry) {
-          unmatchedInMatrix.push(id);
-          if (cond) a.when = cond.id;                       // fall back to the phrase for this row
+          if (!usedExpression) {
+            unmatchedInMatrix.push(id);
+            if (cond) a.when = cond.id;                     // fall back to the phrase for this row
+          }
         } else {
-          const rule = entryToRule(entry);
-          if (rule !== undefined) a.when = rule;
+          if (usedExpression) {
+            report.warnings.push(id + ": has both an Include Expression and a Scenario Matrix row; the expression wins for inclusion (matrix multipliers still apply).");
+          } else {
+            const rule = entryToRule(entry);
+            if (rule !== undefined) a.when = rule;
+            if (entry.require.length && entry.exclude.length) {
+              matrixConflicts.push({
+                id, name: a.name,
+                requiredBy: entry.require.map(c => c.header),
+                excludedBy: entry.exclude.map(c => c.header)
+              });
+            }
+          }
           if (entry.factors.length) {
             a.multipliers = entry.factors.map(f => ({
               when: f.col.rule, factor: f.factor,
               note: f.col.toggle.label + (f.col.header.indexOf("=") > 0 ? " (" + f.col.header.split("=")[1] + ")" : "") + " makes this " + f.factor + "x"
             }));
           }
-          if (entry.require.length && entry.exclude.length) {
-            matrixConflicts.push({
-              id, name: a.name,
-              requiredBy: entry.require.map(c => c.header),
-              excludedBy: entry.exclude.map(c => c.header)
-            });
-          }
         }
-      } else if (cond) a.when = cond.id;
+      } else if (cond && !usedExpression) a.when = cond.id;
       if (category === "milestone") a.milestone = true;
       /* the workbook's own Handoff step type is an explicit declaration, which
          is narrower and more deliberate than our owner-change detection */
@@ -737,9 +838,18 @@
           if (t.options) a.options = t.options;
           if (t.help) a.help = t.help;
           if (t.implies && t.implies.length) a.implies = t.implies;
+          if (t.section !== undefined) a.section = t.section;
+          if (t.shownWhen !== undefined) a.shownWhen = t.shownWhen;
+          if (t.diagnosticOnly) a.diagnosticOnly = true;
+          if (t.derived) a.derived = true;
+          if (t.derivation) a.derivation = t.derivation;
+          if (t.derive) a.derive = t.derive;
+          if (t.required) a.required = true;
+          if (t.overrideRequiresReason) a.overrideRequiresReason = true;
+          if (t.auditRelevant) a.auditRelevant = true;
           return a;
         }).concat(extra),
-        rules: matrix ? {} : namedRules,
+        rules: Object.assign(Object.create(null), matrix ? {} : namedRules, sheetRules),
         /* A profile sets only what it declares. Everything it stays silent
            about keeps whatever the person chose, which is what lets "and it
            involves AI" ride along on top of any profile. */
@@ -769,13 +879,20 @@
     } else {
       scenario = {
         attributes: attributes.length ? attributes : [{ id: "all", label: "All steps", type: "boolean", default: true }],
-        rules: namedRules,
+        rules: Object.assign(Object.create(null), namedRules, sheetRules),
         presets: [
           { id: "everything", label: "Every step (full map)", set: attributes.reduce((o, a) => (o[a.id] = true, o), Object.create(null)) },
           { id: "baseline", label: "Baseline workload only", set: attributes.reduce((o, a) => (o[a.id] = false, o), Object.create(null)) }
         ]
       };
       report.notes.push("No Toggles tab, so the scenario switches were built from the distinct Applies When phrases. Add Toggles, Profiles and Scenario Matrix tabs to tailor properly.");
+    }
+    if (sheetRuleIds.length) {
+      scenario.ruleMeta = ruleMeta;
+      scenario.rulesSheet = {
+        headers: found.rules.matrix[0].map(txt),
+        rows: found.rules.matrix.slice(1).filter(row => txt(row[0]) !== "")
+      };
     }
 
     if (matrix) {

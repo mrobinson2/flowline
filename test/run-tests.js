@@ -76,6 +76,15 @@ function section(t) { results.push("\n" + t); }
     eq("optimized lead 2243.8 h", t.leadOptimal, 2243.8, 0.05);
     eq("optimized cycle 523.8 h", t.cycleOptimal, 523.8, 0.05);
     eq("flow efficiency 10.0%", t.flowEfficiency, 10.0, 0.05);
+    /* the rule layer the v5-spec phases added: a Rules sheet, per-task
+       Include Expressions on the AI-governance rows, and a governed gate */
+    ok("fixture Rules sheet compiled", !!(res.scenario.rules && res.scenario.rules.R_Sourcing),
+      "R_Sourcing missing from " + JSON.stringify(Object.keys(res.scenario.rules || {})));
+    const explained = res.process.activities.filter(a => a.triggerExplanation).length;
+    ok("fixture AI tasks carry an expression + explanation (" + explained + ")", explained >= 4 && explained <= 14);
+    ok("at least one gate is Governed", res.process.activities.some(a => a.canOverride === "governed"));
+    const drAttr = res.scenario.attributes.find(a => a.id === "drRequired");
+    ok("fixture drRequired derivation compiled to engine logic", !!(drAttr && drAttr.derive && drAttr.derive.when));
   } else {
     results.push("  (real workbook: counts not asserted)  " + JSON.stringify(c));
   }
@@ -305,25 +314,26 @@ function section(t) { results.push("\n" + t); }
   const ids = sd.scenario.attributes.map(a => a.id);
   ok("securityReview is gone", ids.indexOf("securityReview") < 0);
   ok("dataClassification is gone", ids.indexOf("dataClassification") < 0);
-  ok("pilotPoc replaces drRequired", ids.indexOf("pilotPoc") >= 0 && ids.indexOf("drRequired") < 0);
-  ok("Data Privacy Review defaults on", sd.scenario.attributes.find(a => a.id === "privacyReview").default === true);
-  /* It is on by default, but it is never taken away from the person doing the
-     tailoring. Whether a workload actually handles personal data is their
-     call, not a rule's. */
-  ok("Data Privacy Review is always available to toggle", (() => {
-    const a = sd.scenario.attributes.find(x => x.id === "privacyReview");
-    return a.enabledWhen === undefined && a.disabledValue === undefined
-      && VSM.rules.isEnabled(a, Object.assign({}, sBase, { pilotPoc: false }), sd.scenario.rules)
-      && VSM.rules.isEnabled(a, Object.assign({}, sBase, { pilotPoc: true }), sd.scenario.rules);
-  })());
-  ok("turning it off actually turns it off, pilot or not", (() => {
-    const offProd = eff(Object.assign({}, sBase, { pilotPoc: false, privacyReview: false }));
-    const offPilot = eff(Object.assign({}, sBase, { pilotPoc: true, privacyReview: false }));
-    return offProd.privacyReview === false && offPilot.privacyReview === false;
-  })());
-  ok("turning it off drops the privacy work",
-    runP({ privacyReview: false }).nodes.length < runP({ privacyReview: true }).nodes.length);
-  ok("a pilot drops the DR work", runP({ pilotPoc: true }).nodes.length < runP({ pilotPoc: false }).nodes.length);
+  /* the §8.5 dissolution: the person describes the workload, the engine
+     decides the work. The old question-toggles are gone from the data. */
+  ok("pilotPoc is dissolved into lifecycleStage + productionIncluded",
+    ids.indexOf("pilotPoc") < 0 && ids.indexOf("lifecycleStage") >= 0 && ids.indexOf("productionIncluded") >= 0);
+  ok("the privacy QUESTION is gone; dataScope describes the data instead",
+    ids.indexOf("privacyReview") < 0 && ids.indexOf("dataScope") >= 0);
+  ok("drRequired is derived now, not asked",
+    (sd.scenario.attributes.find(a => a.id === "drRequired") || {}).derived === true);
+  ok("the service tier exists and defaults to Tier 3",
+    (sd.scenario.attributes.find(a => a.id === "serviceTier") || {}).default === "Tier 3");
+  ok("describing only internal data drops the privacy work",
+    runP({ dataScope: ["internal-business"] }).nodes.length < runP({ dataScope: ["customer-personal"] }).nodes.length);
+  ok("a non-production PoC drops the DR work",
+    runP({ productionIncluded: false }).nodes.length < runP({ productionIncluded: true }).nodes.length);
+  ok("Tier 4 drops the DR work",
+    runP({ serviceTier: "Tier 4" }).nodes.length < runP({ serviceTier: "Tier 3" }).nodes.length);
+  ok("the default lane derives Fast on the paved defaults, with provenance",
+    runP({}).derived.provenance.architectureLane.value === "fast");
+  ok("breaking pattern conformance re-earns the Architecture Review Board",
+    runP({ patternConforms: false }).nodes.some(n => n.id === "arb"));
 
   const names = sd.process.activities.map(a => a.name);
   ["Architecture Review Board", "Security review", "Threat modeling & access review"].forEach(n =>
@@ -331,15 +341,28 @@ function section(t) { results.push("\n" + t); }
   ["Global Architecture Council", "SRD Review", "Routing & Access Controls (RAC)", "OKTA SSO integration"].forEach(n =>
     ok("company-specific name gone: " + n, names.indexOf(n) < 0));
 
+  /* the §8.6 split: SSO went to Identity, the internet/proxy/private chips
+     went to Network & Exposure; integrations keeps the endpoint types */
   const opts = (sd.scenario.attributes.find(a => a.id === "integrations").options || []).map(o => o.label);
-  ["Core systems integration", "API gateway", "Data warehouse", "SSO", "Public Internet",
-   "Private Network (Internal Only)", "Web Proxy", "Managed file transfer"].forEach(l =>
+  ["Core systems integration", "API gateway", "Data warehouse", "Managed file transfer"].forEach(l =>
     ok("integration option: " + l, opts.indexOf(l) >= 0));
+  ["SSO", "Public Internet", "Web Proxy"].forEach(l =>
+    ok("moved off integrations: " + l, opts.indexOf(l) < 0));
   ok("every integration option drives at least one activity", (() => {
     const none = runP({ integrations: [] }).nodes.length;
     return (sd.scenario.attributes.find(a => a.id === "integrations").options || [])
       .every(o => runP({ integrations: [o.value] }).nodes.length > none);
   })(), "an option that changes nothing is a control that lies");
+  ok("inbound and outbound internet drive different work", (() => {
+    const base = runP({ network: [] }).nodes.length;
+    const inb = runP({ network: ["inbound-internet"] });
+    const outb = runP({ network: ["outbound-internet"] });
+    return inb.nodes.length > base && outb.nodes.length > base
+      && inb.nodes.some(n => n.id === "int-internet") && !inb.nodes.some(n => n.id === "int-web-proxy")
+      && outb.nodes.some(n => n.id === "int-web-proxy") && !outb.nodes.some(n => n.id === "int-internet");
+  })());
+  ok("sso-federation on the identity group drives the SSO integration",
+    runP({ identity: ["sso-federation"] }).nodes.some(n => n.id === "int-sso"));
 
   /* A repo that ships as a template should not carry one company's internal
      names. This walks the source tree rather than the model, so it also
@@ -373,7 +396,9 @@ function section(t) { results.push("\n" + t); }
   /* A..Y from the source workbook, plus the Stage rollup as column Z. The
      original 25 stay in their exact positions - asserted below - so the
      source workbook's own tooling still reads the file. */
-  eq("Task List has all 26 columns (A..Y + Stage)", taskSheet.headers.length, 26);
+  eq("Task List has all 32 columns (A..Y + Stage + rule columns)", taskSheet.headers.length, 32);
+  eq("columns A..Y positions unchanged by the rule columns",
+     taskSheet.headers.slice(0, 25).join("|"), want.slice(0, 25).join("|"));
   ok("headers match the schema exactly, in order", JSON.stringify(taskSheet.headers) === JSON.stringify(want),
     JSON.stringify(taskSheet.headers.filter((h, i) => h !== want[i])));
   eq("one row per rendered task", taskSheet.rows.length, em.nodes.length);

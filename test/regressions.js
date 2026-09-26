@@ -108,7 +108,7 @@ function appHarness(initial) {
     rebuild = () => { model = VSM.schedule.build(data.process, data.taxonomy, {}, {}); };
     init = () => { const ok = loadData(); rebuild(); return ok; };   // mirrors the real init(), which reports whether the data validated
     VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, importSheets, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
-      loadState, buildScenarioControls, buildEditForm,
+      loadState, buildScenarioControls, buildEditForm, getState: () => state, effectiveScenario,
       renderWasteChips: () => { rebuild(); renderWasteChips(); } };
   // small public surface`);
   vm.runInContext(src, context);
@@ -820,6 +820,359 @@ function form(extra = {}) {
       // quadratic would be ~16x for 4x the input; allow generous slack for a cold JIT
       assert.ok(ms[1] < Math.max(ms[0], 25) * 8, "draw time grew " + ms[0] + "ms -> " + ms[1] + "ms, faster than linearly");
     });
+  });
+
+  await test("1.3.0: Rules sheet compiles, resolves forward refs, and round-trips", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Applies When"],
+        ["1", "P1", "Base step", "", "8", "4", "Every workload"],
+        ["2", "P1", "Gated step", "1", "8", "4", "Sometimes"]
+      ],
+      "Toggles": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default"],
+        ["rfi", "Sourcing", "RFI", "boolean", "", "No"],
+        ["rfp", "Sourcing", "RFP", "boolean", "", "No"]
+      ],
+      "Rules": [
+        ["Rule ID", "Expression", "Means", "Why It Exists"],
+        ["R_Selection", "R_AnySourcing", "any sourcing route", "written once"],
+        ["R_AnySourcing", "rfi = true OR rfp = true", "rfi or rfp", ""]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    assert.deepEqual(r.scenario.rules.R_AnySourcing, { any: [{ rfi: true }, { rfp: true }] });
+    assert.equal(r.scenario.rules.R_Selection, "R_AnySourcing");   // forward ref kept by name
+    assert.equal(r.scenario.ruleMeta.R_Selection.means, "any sourcing route");
+    assert.ok(r.scenario.rulesSheet && r.scenario.rulesSheet.rows.length === 2);
+    assert.equal(V.validate.run(r.process, r.taxonomy, r.scenario).errors.length, 0);
+    const model = V.schedule.build(r.process, r.taxonomy,
+      V.rules.defaults(r.scenario.attributes), r.scenario.rules, r.scenario.attributes);
+    const out = V.exportWorkbook.sheets(model, { scenarioCfg: r.scenario, scenarioSummary: "" });
+    const rulesOut = out.find(s => s.name === "Rules");
+    assert.ok(rulesOut, "export writes no Rules sheet");
+    assert.equal(rulesOut.rows.length, 2);
+    /* a bad expression is an ERROR naming the rule */
+    const bad = JSON.parse(JSON.stringify(sheets));
+    bad.Rules.push(["R_Broken", "rfi AND", "", ""]);
+    const r2 = V.import.fromSheets(bad, {});
+    assert.ok(r2.report.errors.some(e => e.includes("R_Broken")), JSON.stringify(r2.report.errors));
+    /* a self-reference imports (the id exists) but validation reports the loop */
+    const loopy = JSON.parse(JSON.stringify(sheets));
+    loopy.Rules.push(["R_Loop", "R_Loop", "", ""]);
+    const r3 = V.import.fromSheets(loopy, {});
+    assert.equal(r3.report.errors.length, 0, JSON.stringify(r3.report.errors));
+    const issues3 = V.validate.run(r3.process, r3.taxonomy, r3.scenario);
+    assert.ok(issues3.errors.some(e => /loop/.test(e)), JSON.stringify(issues3.errors));
+  });
+
+  await test("1.3.0: IncludeExpression wins over the matrix, falls back on a bad compile", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Include Expression", "Trigger Explanation", "Can Override", "Rule Priority", "Default Included"],
+        ["1", "P1", "Base", "", "8", "4", "", "", "", "10", "Yes"],
+        ["2", "P1", "Expression-gated", "1", "8", "4", "genAI = true", "Included for AI work", "Governed", "30", ""],
+        ["3", "P1", "Conflicted", "1", "8", "4", "genAI = true", "", "", "", ""],
+        ["4", "P1", "Broken expression", "1", "8", "4", "genAI AND", "", "", "", ""]
+      ],
+      "Toggles": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default"],
+        ["genAI", "Technical", "AI workload", "boolean", "", "No"]
+      ],
+      "Scenario Matrix": [
+        ["Task ID", "Task", "Baseline", "genAI"],
+        ["1", "Base", "Yes", ""],
+        ["2", "Expression-gated", "No", "R"],
+        ["3", "Conflicted", "Yes", ""],
+        ["4", "Broken expression", "No", "R"]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    const byId = Object.fromEntries(r.process.activities.map(a => [a.id, a]));
+    assert.deepEqual(byId["2"].when, { genAI: true });
+    assert.equal(byId["2"].triggerExplanation, "Included for AI work");
+    assert.equal(byId["2"].canOverride, "governed");
+    assert.equal(byId["2"].rulePriority, 30);
+    assert.equal(byId["1"].defaultIncluded, true);
+    assert.deepEqual(byId["3"].when, { genAI: true }, "expression must beat the matrix");
+    assert.ok(r.report.warnings.some(w => w.startsWith("3") && /expression wins/i.test(w)), JSON.stringify(r.report.warnings));
+    assert.ok(r.report.warnings.some(w => w.startsWith("4") && /column/i.test(w)), JSON.stringify(r.report.warnings));
+    assert.deepEqual(byId["4"].when, { genAI: true }, "task 4 falls back to its matrix rule");
+    const off = V.schedule.build(r.process, r.taxonomy, { genAI: false }, r.scenario.rules, r.scenario.attributes);
+    const on = V.schedule.build(r.process, r.taxonomy, { genAI: true }, r.scenario.rules, r.scenario.attributes);
+    assert.equal(off.nodes.length, 1);   // only the baseline task; 2, 3, 4 are all genAI-gated
+    assert.equal(on.nodes.length, 4);
+  });
+
+  await test("1.3.0: Variables sheet columns land on the attributes and shownWhen validates", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+        ["1", "P1", "Step", "", "8", "4"]
+      ],
+      "Variables": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default", "Section", "Shown When", "Derived", "Derivation", "Required", "Override Requires Reason"],
+        ["hosting", "Where", "Hosting", "choice", "Azure;OnPrem", "Azure", "2", "Always", "", "", "Yes", ""],
+        ["privateEndpoint", "Network", "Private endpoint", "boolean", "", "No", "5", "hosting = Azure", "Yes", "RuntimeModel includes PaaS", "", "Yes"]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    const attrs = Object.fromEntries(r.scenario.attributes.map(a => [a.id, a]));
+    assert.equal(attrs.hosting.section, 2);
+    assert.equal(attrs.hosting.shownWhen, undefined);              // Always = absent
+    assert.equal(attrs.hosting.required, true);
+    assert.deepEqual(attrs.privateEndpoint.shownWhen, { hosting: "Azure" });
+    assert.equal(attrs.privateEndpoint.derived, true);
+    assert.equal(attrs.privateEndpoint.derivation, "RuntimeModel includes PaaS");
+    assert.equal(attrs.privateEndpoint.overrideRequiresReason, true);
+    assert.equal(V.validate.run(r.process, r.taxonomy, r.scenario).errors.length, 0,
+      JSON.stringify(V.validate.run(r.process, r.taxonomy, r.scenario).errors));
+    /* a shownWhen naming a ghost attribute warns at import and ships without it */
+    const bad = JSON.parse(JSON.stringify(sheets));
+    bad.Variables[2][7] = "hostng = Azure";
+    const r2 = V.import.fromSheets(bad, {});
+    assert.ok(r2.report.warnings.some(w => /privateEndpoint/.test(w) && /hostng/.test(w)),
+      JSON.stringify(r2.report.warnings));
+    const pe2 = r2.scenario.attributes.find(a => a.id === "privateEndpoint");
+    assert.equal(pe2.shownWhen, undefined, "a broken shownWhen must not ship");
+    assert.equal(V.validate.run(r2.process, r2.taxonomy, r2.scenario).errors.length, 0);
+  });
+
+  await test("1.3.0: derivation engine computes in order with provenance and sticky overrides", () => {
+    const defs = [
+      { id: "serviceTier", label: "Service tier", type: "enum", default: "Tier3",
+        options: ["Tier0", "Tier1", "Tier2", "Tier3", "Tier4"].map(v => ({ value: v, label: v })) },
+      { id: "productionIncluded", label: "Production deployment included", type: "boolean", default: true },
+      { id: "drRequired", label: "DR required", type: "boolean", default: false, derived: true,
+        derive: { when: { all: [{ productionIncluded: true }, { serviceTier: { in: ["Tier0", "Tier1", "Tier2", "Tier3"] } }] } } },
+      { id: "lane", label: "Architecture route", type: "enum", default: "standard", derived: true,
+        overrideRequiresReason: true,
+        derive: { cases: [
+          { when: { drRequired: true }, value: "standard" },
+          { when: true, value: "fast" }
+        ], default: "standard" } }
+    ];
+    const s = V.rules.defaults(defs);
+    const r = V.derive.compute(defs, s, {}, null);
+    assert.equal(r.scenario.drRequired, true);
+    assert.equal(r.scenario.lane, "standard");            // sees the EARLIER derived value
+    assert.deepEqual(r.derived, ["drRequired", "lane"]);
+    const because = r.provenance.drRequired.because;
+    assert.ok(because.some(b => b.attr === "serviceTier" && b.value === "Tier3"), JSON.stringify(because));
+    assert.ok(because.some(b => b.attr === "productionIncluded" && b.value === true));
+    /* boolean false explains itself too */
+    const off = V.derive.compute(defs, Object.assign({}, s, { serviceTier: "Tier4" }), {}, null);
+    assert.equal(off.scenario.drRequired, false);
+    assert.ok(off.provenance.drRequired.because.some(b => b.attr === "serviceTier" && b.satisfied === false),
+      JSON.stringify(off.provenance.drRequired.because));
+    /* sticky override survives an input change and reports itself */
+    const ov = { lane: { value: "fast", reason: "pattern conforms, board approved" } };
+    const r2 = V.derive.compute(defs, Object.assign({}, s, { serviceTier: "Tier0" }), {}, ov);
+    assert.equal(r2.scenario.lane, "fast");
+    assert.equal(r2.overridden.lane.reason, "pattern conforms, board approved");
+    /* an override naming an authored attribute is ignored, not forced */
+    const r3 = V.derive.compute(defs, s, {}, { serviceTier: { value: "Tier0", reason: "x" } });
+    assert.equal(r3.scenario.serviceTier, "Tier3");
+    assert.equal(r3.overridden.serviceTier.ignored, true);
+  });
+
+  await test("1.3.0: derived attributes resolve inside build and overrides ride along", () => {
+    const defs = [
+      { id: "serviceTier", label: "Service tier", type: "enum", default: "Tier3",
+        options: ["Tier0", "Tier3", "Tier4"].map(v => ({ value: v, label: v })) },
+      { id: "drRequired", label: "DR required", type: "boolean", default: false, derived: true,
+        derive: { when: { serviceTier: { in: ["Tier0", "Tier3"] } } } }
+    ];
+    const acts = [task("always"), task("dr-step", { when: { drRequired: true } })];
+    const d = { process: { units: "hours", hoursPerDay: 8, activities: acts }, taxonomy: clone(shipped.taxonomy), scenario: { attributes: defs, rules: {} } };
+    const on = V.schedule.build(d.process, d.taxonomy, V.rules.defaults(defs), {}, defs);
+    assert.ok(on.nodes.some(n => n.id === "dr-step"), "derived true should include the step");
+    assert.ok(on.derived && on.derived.provenance.drRequired, "the model carries the derivation");
+    const off = V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(defs), { serviceTier: "Tier4" }), {}, defs);
+    assert.ok(!off.nodes.some(n => n.id === "dr-step"), "derived false should exclude the step");
+    const forced = V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(defs), { serviceTier: "Tier4" }), {}, defs,
+      { drRequired: { value: true, reason: "regulator says so" } });
+    assert.ok(forced.nodes.some(n => n.id === "dr-step"), "the override must win over the derivation");
+    assert.equal(forced.derived.overridden.drRequired.reason, "regulator says so");
+  });
+
+  await test("1.3.0: derivation shape, option membership and forward references validate", () => {
+    const P = { units: "hours", activities: [task("x")] };
+    const T = clone(shipped.taxonomy);
+    const run = attrs => V.validate.run(P, T, { attributes: attrs, rules: {} });
+    const tier = { id: "tier", label: "Tier", type: "enum", default: "t0",
+      options: [{ value: "t0" }, { value: "t1" }] };
+
+    /* good: the Task 1 shape validates clean */
+    const good = run([tier,
+      { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } } },
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }, { value: "fast" }],
+        derived: true, derive: { cases: [{ when: { dr: true }, value: "std" }], default: "fast" } }]);
+    assert.equal(good.errors.length, 0, JSON.stringify(good.errors));
+
+    /* forward reference: A reads B, B declared later */
+    const fwd = run([tier,
+      { id: "a", label: "A", type: "boolean", default: false, derived: true, derive: { when: { b: true } } },
+      { id: "b", label: "B", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } } }]);
+    assert.ok(fwd.errors.some(e => e.includes("'a'") && e.includes("'b'")), JSON.stringify(fwd.errors));
+
+    /* a case value outside the options */
+    const badCase = run([tier,
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }],
+        derived: true, derive: { cases: [{ when: { tier: "t0" }, value: "warp" }], default: "std" } }]);
+    assert.ok(badCase.errors.some(e => /warp/.test(e)), JSON.stringify(badCase.errors));
+
+    /* a default outside the options */
+    const badDefault = run([tier,
+      { id: "lane", label: "Lane", type: "enum", default: "std", options: [{ value: "std" }],
+        derived: true, derive: { cases: [{ when: { tier: "t0" }, value: "std" }], default: "warp" } }]);
+    assert.ok(badDefault.errors.some(e => /warp/.test(e)), JSON.stringify(badDefault.errors));
+
+    /* a derive rule naming a ghost attribute goes through checkRule */
+    const ghost = run([tier,
+      { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { teir: "t0" } } }]);
+    assert.ok(ghost.errors.some(e => /teir/.test(e)), JSON.stringify(ghost.errors));
+
+    /* derive on a multi is refused */
+    const multi = run([tier,
+      { id: "m", label: "M", type: "multi", default: [], options: [{ value: "a" }],
+        derived: true, derive: { when: { tier: "t0" } } }]);
+    assert.ok(multi.errors.some(e => /multi/.test(e)), JSON.stringify(multi.errors));
+  });
+
+  await test("1.3.0: the dissolved vocabulary keeps the default map identical", () => {
+    /* the shipped default scenario BEFORE the vocabulary change: 39 rows */
+    const OLD_DEFAULT_IDS = ["arch-design","biz-case","cab","cloud-cost-approval","cloud-env-dev","cloud-iac","cloud-iam","cloud-landing-zone","cloud-network","cloud-subscription","code-review","data-class","dba-provision","defect-rework","deploy-prod","dev-build","dr-design","dr-env-cloud","dr-test","go-live","hypercare","intake","intake-triage","kickoff","ops-readiness","pen-test","perf-test","privacy-review","privacy-signoff","qa-env-wait","qa-test","release-window","sast","sec-attest","sec-design-review","sec-findings-rework","sizing","threat-model","uat"];
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    assert.ok(!d.scenario.attributes.some(a => a.id === "pilotPoc" || a.id === "privacyReview"),
+      "the pilotPoc / privacyReview toggles must be dissolved (spec §8.5)");
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    const model = build2();
+    assert.deepEqual(model.nodes.map(n => n.id).sort(), OLD_DEFAULT_IDS, "default map must not change");
+    assert.equal(model.metrics.currentElapsed, 198, "default elapsed must stay 198 days");
+    /* tier drives the DR chain */
+    const t4 = build2({ serviceTier: "Tier 4" });
+    const dropped = OLD_DEFAULT_IDS.filter(x => !t4.nodes.some(n => n.id === x));
+    assert.ok(dropped.length >= 3 && dropped.every(x => /^dr-/.test(x) || x === "dr-test"), JSON.stringify(dropped));
+    /* pattern conformance drives the lane, the lane drives the ARB chain */
+    const std = build2({ patternConforms: false });
+    ["arb", "arb-rework", "sec-design-recheck"].forEach(id =>
+      assert.ok(std.nodes.some(n => n.id === id), id + " should appear on the standard lane"));
+    assert.equal(std.derived.provenance.architectureLane.value, "standard");
+    /* data scope drives privacy: no personal or regulated data, no PIA */
+    const noPii = build2({ dataScope: ["internal-business"] });
+    assert.ok(!noPii.nodes.some(n => n.id === "privacy-review"), "no regulated data, no privacy impact assessment");
+    /* a stale saved state carrying retired ids stays inert */
+    const stale = build2({ pilotPoc: true, privacyReview: false });
+    assert.deepEqual(stale.nodes.map(n => n.id).sort(), OLD_DEFAULT_IDS, "retired ids must be inert");
+  });
+
+  await test("1.3.0: saved browser state survives a vocabulary change", () => {
+    /* Startup used to merge saved answers blindly; only the linked-folder
+       path filtered them. A retired enum value then evaluated as a ghost:
+       every rule reading it went false and rows vanished with no error. */
+    const attrs = [
+      { id: "hosting", label: "Hosting", type: "enum", default: "azure",
+        options: [{ value: "azure" }, { value: "on-prem" }] },
+      { id: "integrations", label: "Integrations", type: "multi", default: [],
+        options: [{ value: "api-gateway" }, { value: "mft" }] },
+      { id: "aiWorkload", label: "AI", type: "boolean", default: false }
+    ];
+    const h = appHarness({ process: { units: "hours", activities: [task("A")] },
+      taxonomy: clone(shipped.taxonomy), scenario: { attributes: attrs, rules: {} } });
+    h.storage.set("vsm.state.v1", JSON.stringify({ scenario: {
+      hosting: "cloud",                                   // retired option value
+      integrations: ["public-internet", "mft"],           // one retired, one alive
+      aiWorkload: true,                                   // still valid
+      pilotPoc: true                                      // retired attribute id
+    } }));
+    h.api.loadState();
+    const s = h.api.getState().scenario;
+    assert.equal(s.hosting, "azure", "a retired enum value must fall back to the default");
+    /* JSON compare: the state lives in the VM realm, whose Array prototype
+       fails deepStrictEqual against ours on identical values */
+    assert.equal(JSON.stringify(s.integrations), JSON.stringify(["mft"]), "retired multi values must be filtered out");
+    assert.equal(s.aiWorkload, true, "valid saved answers must survive");
+    assert.equal(s.pilotPoc, undefined, "a retired attribute id must not ride along");
+  });
+
+  await test("1.3.0: vocabulary v2 - hosting split, network split, sourcing facts", () => {
+    const OLD_DEFAULT_IDS = ["arch-design","biz-case","cab","cloud-cost-approval","cloud-env-dev","cloud-iac","cloud-iam","cloud-landing-zone","cloud-network","cloud-subscription","code-review","data-class","dba-provision","defect-rework","deploy-prod","dev-build","dr-design","dr-env-cloud","dr-test","go-live","hypercare","intake","intake-triage","kickoff","ops-readiness","pen-test","perf-test","privacy-review","privacy-signoff","qa-env-wait","qa-test","release-window","sast","sec-attest","sec-design-review","sec-findings-rework","sizing","threat-model","uat"];
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    /* the default map survives its third vocabulary change */
+    const dft = build2();
+    assert.equal(JSON.stringify(dft.nodes.map(n => n.id).sort()), JSON.stringify(OLD_DEFAULT_IDS));
+    assert.equal(dft.metrics.currentElapsed, 198);
+    /* §8.2: bare "Cloud" is retired; AWS keeps generic cloud work and drops the Azure-specific rows */
+    const hosting = d.scenario.attributes.find(a => a.id === "hosting");
+    assert.ok(!hosting.options.some(o => o.value === "cloud"), "bare Cloud must be retired");
+    assert.ok(hosting.options.length >= 6, "hosting gains the split targets");
+    const aws = build2({ hosting: "aws" });
+    ["cloud-network", "cloud-iac", "cloud-cost-approval", "cloud-env-dev"].forEach(id =>
+      assert.ok(aws.nodes.some(n => n.id === id), id + " is generic cloud work and must survive AWS"));
+    ["cloud-subscription", "cloud-landing-zone", "cloud-iam", "gpu-quota"].forEach(id =>
+      assert.ok(!aws.nodes.some(n => n.id === id), id + " is Azure-specific and must drop on AWS"));
+    /* §8.6: inbound exposure and outbound dependency are different consequences */
+    const inb = build2({ network: ["inbound-internet"] });
+    assert.ok(inb.nodes.some(n => n.id === "int-internet"), "inbound triggers the exposure/WAF review");
+    assert.ok(!inb.nodes.some(n => n.id === "int-web-proxy"), "inbound alone must not trigger the proxy");
+    assert.equal(inb.derived.provenance.wafRequired.value, true);
+    const outb = build2({ network: ["outbound-internet"] });
+    assert.ok(outb.nodes.some(n => n.id === "int-web-proxy"), "outbound triggers proxy allowlisting");
+    assert.ok(!outb.nodes.some(n => n.id === "int-internet"), "outbound alone must not trigger the exposure review");
+    assert.equal(outb.derived.provenance.proxyAllowlisting.value, true);
+    /* §8.4's common real case: an existing vendor's people need access - SOW
+       and onboarding, but no new-vendor contracting and no product selection */
+    const svc = build2({ thirdPartyInvolved: true, vendorNeedsOrgAccess: true, professionalServices: true });
+    assert.ok(svc.nodes.some(n => n.id === "vendor-onboard"), "access -> onboarding");
+    assert.ok(svc.nodes.some(n => n.id === "vendor-risk"), "third party with access -> risk assessment");
+    assert.ok(!svc.nodes.some(n => n.id === "vendor-contract"), "no new vendor, no contract negotiation");
+    assert.ok(!svc.nodes.some(n => n.id === "vendor-rfp"), "no product selection for a services engagement");
+    /* the SaaS profile still lights its vendor chain through the new facts */
+    const saas = d.scenario.presets.find(p => p.id === "adopt-saas");
+    const saasModel = build2(saas.set);
+    ["vendor-rfp", "vendor-risk", "vendor-contract"].forEach(id =>
+      assert.ok(saasModel.nodes.some(n => n.id === id), id + " must fire for SaaS adoption"));
+    /* identity is its own vocabulary now */
+    assert.ok(!d.scenario.attributes.find(a => a.id === "integrations").options.some(o => /sso|internet|proxy|private/i.test(o.value)),
+      "sso and the network chips leave the integrations group");
+    const sso = build2({ identity: ["sso-federation"] });
+    assert.ok(sso.nodes.some(n => n.id === "int-sso"), "sso-federation drives the SSO integration");
+    /* §8.3: the GenAI split, with its dependents disclosed only when it is on */
+    const genAI = d.scenario.attributes.find(a => a.id === "genAiWorkload");
+    assert.ok(genAI, "genAiWorkload exists");
+    const dep = d.scenario.attributes.find(a => a.id === "genAiMonthlyCostOver1k");
+    assert.ok(dep && dep.shownWhen && dep.shownWhen.genAiWorkload === true, "cost dependent discloses on genAI");
+    /* every attribute the sidebar renders carries a wizard section */
+    const missing = d.scenario.attributes.filter(a => !a.hidden && !a.derived && !a.section).map(a => a.id);
+    assert.equal(missing.length, 0, "attributes without a section: " + missing.join(", "));
+  });
+
+  await test("1.3.0: shownWhen hides a control's value from evaluation and restores it", () => {
+    const attrs = [
+      { id: "genAI", label: "GenAI", type: "boolean", default: false, section: 2 },
+      { id: "costOver1k", label: "Cost over 1k", type: "boolean", default: false, section: 2,
+        shownWhen: { genAI: true } }
+    ];
+    const h = appHarness({ process: { units: "hours", activities: [task("A"), task("gate", { predecessors: ["A"], when: { costOver1k: true } })] },
+      taxonomy: clone(shipped.taxonomy), scenario: { attributes: attrs, rules: {} } });
+    h.api.loadState();
+    const st = h.api.getState();
+    st.scenario.costOver1k = true;          // answered while visible...
+    st.scenario.genAI = false;              // ...then its parent turned off
+    const hidden = h.api.effectiveScenario();
+    assert.equal(hidden.costOver1k, false, "a hidden value must not evaluate");
+    st.scenario.genAI = true;
+    const shown = h.api.effectiveScenario();
+    assert.equal(shown.costOver1k, true, "re-showing restores the retained value");
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

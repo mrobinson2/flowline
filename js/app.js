@@ -94,6 +94,12 @@
   function defaultState() {
     return {
       scenario: VSM.rules.defaults(data.scenario.attributes),
+      /* sticky overrides of DERIVED attributes: { id: { value, reason } }.
+         They live outside state.scenario so a profile change never clears
+         a decision somebody wrote a reason for. */
+      overrides: {},
+      /* which wizard sections are open; 1 and 2 default open */
+      sections: {},
       profile: null,
       view: "current",
       filters: { wasteTypes: [], owners: [], search: "" },
@@ -103,13 +109,37 @@
       metricsPanel: true
     };
   }
+  /* Merge a saved answer set over the CURRENT vocabulary: keep every choice
+     that still applies, default the rest, drop the orphans. Startup and the
+     linked-folder path both go through here, because a saved state can
+     predate a vocabulary change just as easily as a loaded file can declare
+     one - and a retired enum value merged blindly evaluates as a ghost:
+     every rule reading it goes false and rows vanish with no error. */
+  function mergeScenario(attrDefs, saved) {
+    const fresh = VSM.rules.defaults(attrDefs);
+    (attrDefs || []).forEach(a => {
+      const v = saved ? saved[a.id] : undefined;
+      if (v === undefined) return;
+      if (a.type === "boolean") { if (typeof v === "boolean") fresh[a.id] = v; }
+      else if (a.type === "multi") { if (Array.isArray(v)) fresh[a.id] = v.filter(x => (a.options || []).some(o => o.value === x)); }
+      else if ((a.options || []).some(o => o.value === v)) fresh[a.id] = v;
+    });
+    return fresh;
+  }
+
   function loadState() {
     state = defaultState();
     try {
       const saved = JSON.parse(localStorage.getItem(STATE_KEY) || "null");
       if (!saved && window.innerWidth < 900) state.sidebar = false;
       if (saved) {
-        state.scenario = Object.assign(state.scenario, saved.scenario || {});
+        state.scenario = mergeScenario(data.scenario.attributes, saved.scenario || {});
+        if (saved.overrides && typeof saved.overrides === "object" && !Array.isArray(saved.overrides)) {
+          state.overrides = Object.assign({}, saved.overrides);
+        }
+        if (saved.sections && typeof saved.sections === "object" && !Array.isArray(saved.sections)) {
+          state.sections = Object.assign({}, saved.sections);
+        }
         state.profile = saved.profile || null;
         state.view = saved.view || state.view;
         state.filters = Object.assign(state.filters, saved.filters || {});
@@ -139,19 +169,25 @@
 
   function saveState() { try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
 
-  /* Disabled controls (enabledWhen false) contribute a neutral value so rules never see stale input. */
+  /* Disabled controls (enabledWhen false) contribute a neutral value so rules
+     never see stale input. HIDDEN controls (shownWhen false, or diagnostic-
+     only) get the same treatment: their values stay in state - re-showing
+     restores them - but while hidden they must not fire rules the person can
+     no longer see the cause of (spec §4.5). */
   function effectiveScenario() {
     const s = Object.assign({}, state.scenario);
+    const neutralize = a => { s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]); };
     data.scenario.attributes.forEach(a => {
-      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) {
-        s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]);
-      }
+      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) { neutralize(a); return; }
+      if (a.diagnosticOnly) { neutralize(a); return; }
+      if (a.shownWhen !== undefined && !a.derived && !VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules())) neutralize(a);
     });
     return s;
   }
   function scenarioSummary() {
     const s = effectiveScenario(), parts = [];
     data.scenario.attributes.forEach(a => {
+      if (a.derived) return;                 // the engine's answers live on the chips
       if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) return;
       const v = s[a.id];
       if (a.type === "boolean") { if (v) parts.push(a.label); }
@@ -207,7 +243,7 @@
        leave a blank page with no way back, so report it like any other data
        error and keep the last good chart on screen. */
     try {
-      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes);
+      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes, state.overrides);
     } catch (e) {
       lastIssues = { errors: issues.errors.concat("the schedule could not be built: " + e.message), warnings: issues.warnings };
       renderIssues(lastIssues);
@@ -222,6 +258,7 @@
     renderWarnings();
     renderMetrics();
     renderWasteChips();
+    renderDerived();
     renderChart();
     if (document.body.classList.contains("presenting")) renderPresentation();
     if (selectedId) showDetails(selectedId);
@@ -315,6 +352,88 @@
     });
   }
 
+  /* ------------------------------------------------------------ derived chips
+     The engine's answers (spec §4.4): each derived attribute renders as a
+     muted chip with its value and the SPECIFIC answers that produced it -
+     never generic text - plus an override affordance. An override is sticky,
+     badged, and carries its reason. */
+  function renderDerived() {
+    const box = $("#derived-chips");
+    if (!box) return;
+    box.innerHTML = "";
+    const dv = model && model.derived;
+    if (!dv || !dv.derived.length) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(h("div", { class: "control-group" }, "Derived by the engine"));
+    dv.derived.forEach(id => {
+      const attr = data.scenario.attributes.find(a => a.id === id);
+      if (!attr) return;
+      const p = dv.provenance[id] || { value: undefined, because: [] };
+      const ov = dv.overridden && Object.prototype.hasOwnProperty.call(dv.overridden, id) && !dv.overridden[id].ignored ? dv.overridden[id] : null;
+      const valueLabel = v => {
+        const o = attr.options ? attr.options.find(x => x.value === v) : null;
+        return o ? o.label : v === true ? "Yes" : v === false ? "No" : String(v);
+      };
+      const chip = h("div", { class: "derived-chip" + (ov ? " overridden" : "") });
+      chip.appendChild(h("div", { class: "dc-head" },
+        h("span", { class: "dc-label" }, attr.label),
+        h("b", { class: "dc-value" }, valueLabel(p.value)),
+        ov ? h("em", { class: "dc-badge", title: ov.reason || "" }, "overridden") : null));
+      if (ov) {
+        chip.appendChild(h("div", { class: "dc-why" }, "Overridden" + (ov.reason ? ": " + ov.reason : " (no reason recorded)")));
+      } else {
+        const because = (p.because || []).slice(0, 4);
+        if (because.length) chip.appendChild(h("div", { class: "dc-why" },
+          "Because: " + because.map(b => (b.satisfied === false ? "not: " : "") + b.label + " = " + b.valueLabel).join("  ·  ")));
+      }
+      const actions = h("div", { class: "dc-actions" });
+      actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => overrideDialog(attr, p.value, ov) }, ov ? "Change" : "Override"));
+      if (ov) actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+        delete state.overrides[id]; rebuild(); toast(attr.label + " derives again");
+      } }, "Clear override"));
+      chip.appendChild(actions);
+      box.appendChild(chip);
+    });
+  }
+
+  function overrideDialog(attr, current, existing) {
+    if (!document.body) return;
+    const needReason = !!attr.overrideRequiresReason;
+    const overlay = h("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
+    const done = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = e => { if (e.key === "Escape") done(); };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(); });
+    let chosen = existing ? existing.value : current;
+    const choices = attr.type === "boolean" ? [[true, "Yes"], [false, "No"]] : (attr.options || []).map(o => [o.value, o.label]);
+    const seg = h("div", { class: "segmented" });
+    const paint = () => { [...seg.children].forEach((b, i) => b.classList.toggle("on", choices[i][0] === chosen)); };
+    choices.forEach(([v, lab]) => seg.appendChild(h("button", { type: "button", onclick: () => { chosen = v; paint(); } }, lab)));
+    const reason = h("textarea", { class: "input", rows: 2,
+      placeholder: needReason ? "Why does the derivation not apply here? (required)" : "Reason (recommended)" });
+    if (existing && existing.reason) reason.value = existing.reason;
+    const hint = h("div", { class: "hint", hidden: true }, "A reason is required for this override.");
+    overlay.appendChild(h("div", { class: "overlay-box" },
+      h("div", { class: "overlay-head" },
+        h("h2", null, "Override: " + attr.label),
+        h("button", { class: "icon", type: "button", title: "Cancel", onclick: done }, "×")),
+      h("div", { class: "overlay-body" },
+        h("p", null, "The engine derived “" + (choices.find(c => c[0] === current) || [null, String(current)])[1] +
+          "”. An override is sticky - it wins over the derivation on every recompute until it is cleared - and it is recorded with the scenario."),
+        seg,
+        h("label", { class: "field" }, h("span", null, "Reason" + (needReason ? " (required)" : "")), reason), hint),
+      h("div", { class: "overlay-foot" },
+        h("button", { class: "ghost", type: "button", onclick: done }, "Cancel"),
+        h("button", { class: "primary", type: "button", onclick: () => {
+          const why = reason.value.trim();
+          if (needReason && !why) { hint.hidden = false; reason.focus(); return; }
+          state.overrides[attr.id] = why ? { value: chosen, reason: why } : { value: chosen };
+          done(); rebuild(); toast(attr.label + " overridden");
+        } }, "Apply override"))));
+    document.body.appendChild(overlay);
+    paint();
+  }
+
   /* Scheduler notes are merged with whatever validation reported for this data. */
   function renderWarnings() {
     renderIssues({ errors: lastIssues.errors, warnings: lastIssues.warnings.concat(model.warnings) });
@@ -382,22 +501,35 @@
       });
     });
 
-    let lastGroup = null;
-    data.scenario.attributes.forEach(a => {
-      if (a.hidden) return;                 // set elsewhere (work type is the Scenario dropdown)
-      if (a.group && a.group !== lastGroup) {
-        box.appendChild(h("div", { class: "control-group" }, a.group));
-        lastGroup = a.group;
-      }
+    /* ---- one control row (spec §4.3: booleans are Yes/No segmented pairs,
+       never bare switches - ambiguous when a question is negatively phrased;
+       single-choice stays segmented up to six options, dropdown above) ---- */
+    function renderControl(a, body) {
       const enabled = VSM.rules.isEnabled(a, state.scenario, namedRules());
       const forced = impliedBy[a.id] && resolved[a.id] && !state.scenario[a.id];
       const row = h("div", { class: "control" + (enabled ? "" : " disabled") + (forced ? " forced" : "") });
       if (a.type === "boolean") {
-        const input = h("input", { type: "checkbox" });
-        input.checked = !!state.scenario[a.id] || !!forced;
-        input.disabled = !enabled || !!forced;
-        input.onchange = () => { state.scenario[a.id] = input.checked; touched(a.id); buildScenarioControls(); rebuild(); };
-        row.appendChild(h("label", { class: "switch" }, input, h("span", { class: "track" }), h("span", { class: "lbl" }, a.label)));
+        row.appendChild(h("div", { class: "lbl" }, a.label));
+        const seg = h("div", { class: "segmented seg-bool" });
+        const cur = !!state.scenario[a.id] || !!forced;
+        [["Yes", true], ["No", false]].forEach(([lab, val]) => {
+          const b = h("button", { type: "button", class: cur === val ? "on" : "" }, lab);
+          b.disabled = !enabled || !!forced;
+          b.onclick = () => { state.scenario[a.id] = val; touched(a.id); buildScenarioControls(); rebuild(); };
+          seg.appendChild(b);
+        });
+        row.appendChild(seg);
+      } else if (a.type === "enum" && (a.options || []).length > 6) {
+        if (a.label !== a.group) row.appendChild(h("div", { class: "lbl" }, a.label));
+        const sel = h("select", { class: "select" });
+        (a.options || []).forEach(o => {
+          const opt = h("option", { value: o.value }, o.label);
+          if (state.scenario[a.id] === o.value) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.disabled = !enabled;
+        sel.onchange = () => { state.scenario[a.id] = sel.value; touched(a.id); buildScenarioControls(); rebuild(); };
+        row.appendChild(sel);
       } else if (a.type === "enum") {
         if (a.label !== a.group) row.appendChild(h("div", { class: "lbl" }, a.label));
         const seg = h("div", { class: "segmented" });
@@ -424,7 +556,72 @@
       if (forced) row.appendChild(h("div", { class: "hint" }, "Required by " + impliedBy[a.id].join(", ")));
       else if (a.help) row.appendChild(h("div", { class: "hint" }, a.help));
       if (a.enabledWhen && !enabled) row.appendChild(h("div", { class: "hint" }, "Applies when " + VSM.rules.describe(a.enabledWhen, data.scenario.attributes, namedRules())));
-      box.appendChild(row);
+      body.appendChild(row);
+    }
+
+    /* ---- the six wizard sections (spec §4.2), plus a trailing section for
+       imported data that predates section numbers. A control whose shownWhen
+       is false is not rendered at all; its value stays in state and comes
+       back when the rule turns true (spec §4.5). ---- */
+    const SECTION_TITLES = {
+      1: "What are you doing?", 2: "Where and how will it run?", 3: "Is it standard?",
+      4: "What data and business risk?", 5: "What external dependencies?", 6: "Who builds and operates it?"
+    };
+    const visible = a => !a.hidden && !a.derived && !a.diagnosticOnly
+      && (a.shownWhen === undefined || VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules()));
+    const bySection = new Map();
+    data.scenario.attributes.forEach(a => {
+      if (!visible(a)) return;
+      const key = a.section >= 1 && a.section <= 6 ? a.section : 0;
+      if (!bySection.has(key)) bySection.set(key, []);
+      bySection.get(key).push(a);
+    });
+    const defaults = VSM.rules.defaults(data.scenario.attributes);
+    const same = (x, y) => Array.isArray(x) && Array.isArray(y)
+      ? x.length === y.length && x.every(v => y.includes(v)) : x === y;
+    const requiredUnanswered = a => {
+      if (!a.required) return false;
+      const v = state.scenario[a.id];
+      if (a.type === "multi") return !Array.isArray(v) || v.length === 0;
+      if (a.type === "enum") return v === "tbd" || v === undefined || v === null || v === "";
+      return v === undefined;
+    };
+    /* dot policy, in one place: ◐ a required answer is missing (the tier says
+       "Not yet determined", the data list is empty); ● something in the
+       section was answered away from its default; ○ untouched. */
+    const sectionState = attrs => {
+      if (attrs.some(requiredUnanswered)) return "partial";
+      if (attrs.some(a => !same(state.scenario[a.id], defaults[a.id]))) return "done";
+      return "untouched";
+    };
+    const DOT = { done: "●", partial: "◐", untouched: "○" };
+    [1, 2, 3, 4, 5, 6, 0].forEach(n => {
+      const attrs = bySection.get(n);
+      if (!attrs || !attrs.length) return;
+      const stateName = sectionState(attrs);
+      const open = state.sections[n] === undefined ? n <= 2 : !!state.sections[n];
+      const sec = h("div", { class: "wizard-section" + (open ? " open" : "") });
+      const head = h("button", {
+        type: "button", class: "section-head", "aria-expanded": open ? "true" : "false",
+        onclick: () => { state.sections[n] = !open; saveState(); buildScenarioControls(); }
+      },
+        h("i", { class: "dot " + stateName }, DOT[stateName]),
+        h("span", null, n === 0 ? "Options" : n + ". " + SECTION_TITLES[n]),
+        h("em", { class: "chev" }, open ? "−" : "+"));
+      sec.appendChild(head);
+      if (open) {
+        const body = h("div", { class: "section-body" });
+        let lastGroup = null;
+        attrs.forEach(a => {
+          if (a.group && a.group !== lastGroup) {
+            body.appendChild(h("div", { class: "control-group" }, a.group));
+            lastGroup = a.group;
+          }
+          renderControl(a, body);
+        });
+        sec.appendChild(body);
+      }
+      box.appendChild(sec);
     });
   }
 
@@ -1025,19 +1222,9 @@
     // a linked folder is the source of truth, so drop any browser-held override
     localStorage.removeItem(DATA_KEY);
     data = candidate;
-    /* The incoming data may declare a different toggle vocabulary. Keep every
-       choice that still applies, default the rest, and drop the orphans -
-       otherwise the summary line reads "undefined" and the rules evaluate
-       against values that no longer exist. */
-    const fresh = VSM.rules.defaults(data.scenario.attributes);
-    (data.scenario.attributes || []).forEach(a => {
-      const v = state.scenario ? state.scenario[a.id] : undefined;
-      if (v === undefined) return;
-      if (a.type === "boolean") { if (typeof v === "boolean") fresh[a.id] = v; }
-      else if (a.type === "multi") { if (Array.isArray(v)) fresh[a.id] = v.filter(x => (a.options || []).some(o => o.value === x)); }
-      else if ((a.options || []).some(o => o.value === v)) fresh[a.id] = v;
-    });
-    state.scenario = fresh;
+    /* The incoming data may declare a different toggle vocabulary. Same
+       filter as startup: keep what still applies, default the rest. */
+    state.scenario = mergeScenario(data.scenario.attributes, state.scenario);
     if (state.profile && !(data.scenario.presets || []).some(p => p.id === state.profile)) state.profile = null;
     describeSource(null);
     buildScenarioControls();

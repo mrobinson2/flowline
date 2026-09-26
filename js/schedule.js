@@ -76,12 +76,20 @@ VSM.schedule = (function () {
     return { current: round(current), optimal: round(optimal), excess: round(current - optimal), factor, overrideNote: note, warning };
   }
 
-  function build(process, taxonomy, scenario, named, attrDefs) {
+  function build(process, taxonomy, scenario, named, attrDefs, overrides) {
     /* Resolve toggle implications here rather than in the UI, so every caller
        gets the same answer: the app, the tests, and anything running in Node.
        The result depends only on the final state, never on the order things
        were switched on. */
     if (attrDefs && VSM.rules.applyImplications) scenario = VSM.rules.applyImplications(attrDefs, scenario);
+    /* Then the derived attributes (lane, tier-driven controls, privacy
+       trigger), in declaration order, with provenance and any sticky user
+       overrides. The model carries the result so the UI can explain it. */
+    let derived = null;
+    if (attrDefs && VSM.derive) {
+      derived = VSM.derive.compute(attrDefs, scenario, named, overrides);
+      scenario = derived.scenario;
+    }
     const acts = process.activities || [];
     const teams = process.teams || {};
     const warnings = [];
@@ -298,7 +306,7 @@ VSM.schedule = (function () {
     const orgPairs = new Set(links.filter(l => l.crossOrg).map(l => [l.fromTeam.org, l.toTeam.org].sort().join(" | ")));
     m.orgBoundaries = orgPairs.size;
 
-    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy };
+    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy, derived };
   }
 
   return { build, resolveDuration, resolveTime, setDuration };

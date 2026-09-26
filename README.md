@@ -28,7 +28,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.2.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.2.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.3.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.3.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 
@@ -144,7 +144,7 @@ The wrapper exists because browsers refuse `fetch()` of a local file opened from
 
 A value stream is not one process. An off-the-shelf SaaS purchase and a greenfield build pioneering three new services do not go through the same steps, and averaging them describes neither.
 
-Flowline models that as one **profile** (a saved set of options for a type of work) plus any number of **modifiers** (individual options such as whether it involves AI or regulated data). A profile declares values for some toggles and stays silent on the rest, so switching profile leaves a modifier it never mentioned exactly where you put it.
+Flowline models that as one **profile** (a saved set of options for a type of work) plus any number of **modifiers** (individual options such as whether it involves AI or regulated data). A profile declares values for some toggles and stays silent on the rest, so switching profile leaves a modifier it never mentioned exactly where you put it. The questions themselves sit in six collapsible sections — what are you doing, where will it run, is it standard, what data and risk, what dependencies, who builds and operates it — each with a completion dot, so describing a workload reads as a short interview rather than a wall of switches.
 
 The model is recomputed from the whole current state every time rather than mutated step by step, so profile-then-modifier gives the identical answer to the other order. A test asserts it.
 
@@ -160,6 +160,8 @@ Conditions are declarative and can be named once and reused:
 ```json
 { "id": "threat-model", "when": "deepSecurity", "duration": { "current": 4, "optimal": 3 } }
 ```
+
+Some answers the engine works out for itself. You describe the workload — what data it holds, its service tier, whether an approved pattern fits — and **derived values** (the architecture route, whether a privacy review or DR is required) are computed and shown as chips that cite the specific answers behind them: *Because: Service tier = Tier 3, Pattern conforms = Yes*. A derived value can be overridden, and an override is sticky — it wins over the derivation until it is cleared — and carries a recorded reason where the data demands one. Nobody is asked "do you need a privacy review?"; they say what data is involved, and the review follows.
 
 Toggles do not only add and remove steps, they change how long a step takes. A Scenario Matrix cell holding a number both requires the task and multiplies its duration, because an architecture review for a catalog pattern is not the review a greenfield build gets.
 
@@ -204,6 +206,7 @@ When a load fails validation the previous chart stays on screen and the errors a
 
 ```bash
 node test/run-tests.js                                # arithmetic, against the fixture
+node test/expr-tests.js                               # the expression-language compiler
 node test/regressions.js                              # security and correctness regressions
 IMPORT_FILE=/path/to/real.xlsx node test/run-tests.js # point it at your own workbook
 ONLY="quadratic" node test/regressions.js             # run one regression group

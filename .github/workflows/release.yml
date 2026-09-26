@@ -23,6 +23,9 @@ jobs:
       - name: Run the test suite
         run: node test/run-tests.js
 
+      - name: Run the expression-language unit tests
+        run: node test/expr-tests.js
+
       - name: Run security and correctness regressions
         run: node test/regressions.js
 

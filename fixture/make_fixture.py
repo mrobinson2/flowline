@@ -237,6 +237,20 @@ for r in rows:
 
     matrix_rows.append([rid, name, baseline] + [cell[c] for c in MATRIX_CONDITIONS])
 
+# ---------------------------------------------------------------------------
+# RULE-LAYER COLUMNS on the Task List (all optional in the app). The AI
+# governance rows carry an Include Expression semantically identical to their
+# matrix cell, so the scoped schedule is unchanged and the expression-vs-
+# matrix precedence path gets exercised by a real workbook. Phase-8 gates are
+# Governed: a normal user cannot switch a security approval off.
+# ---------------------------------------------------------------------------
+for r in rows:
+    rid, phase, kind = r[0], r[1], r[7]
+    expr = "genAI = true" if rid in AI_TASKS else ""
+    trig = "AI governance applies to generative AI workloads" if rid in AI_TASKS else ""
+    can = "Governed" if (kind == "Approval Gate" and PHASE_NO[phase] == 8) else ""
+    r += ["", expr, trig, "", can, ""]   # Rule ID, Include Expression, Trigger Explanation, Default Included, Can Override, Rule Priority
+
 wb = openpyxl.Workbook()
 hdr_fill = PatternFill("solid", fgColor="FF1F3864")
 hdr_font = Font(bold=True, color="FFFFFFFF")
@@ -255,10 +269,14 @@ def sheet(name, cols, data, widths=None, first=False):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = wdt
     return ws
 
-sheet("Task List", TASK_COLUMNS, rows,
-      [6,30,42,26,24,24,14,30,20,16,26,12,12,12,12,9,11,12,12,12,12,12,10,11,20], first=True)
+sheet("Task List", TASK_COLUMNS + ["Rule ID", "Include Expression", "Trigger Explanation",
+                                   "Default Included", "Can Override", "Rule Priority"], rows,
+      [6,30,42,26,24,24,14,30,20,16,26,12,12,12,12,9,11,12,12,12,12,12,10,11,20,10,24,34,12,12,11], first=True)
 sheet("Edges", EDGE_COLUMNS, edge_rows, [12,13,42,42,14,14,13])
-sheet("Toggles", TOGGLE_COLUMNS, TOGGLES, [16, 12, 40, 10, 54, 20, 14, 52])
+sheet("Toggles", TOGGLE_COLUMNS,
+      [t + TOGGLE_EXTRAS.get(t[0], ("", "Always", "", "")) for t in TOGGLES],
+      [16, 12, 40, 10, 54, 20, 14, 52, 9, 20, 9, 40])
+sheet("Rules", RULE_COLUMNS, RULES, [18, 56, 34, 52])
 sheet("Profiles", PROFILE_COLUMNS + [t[0] for t in TOGGLES],
       [[p[0], p[1], p[2]] + [p[3].get(t[0], "") for t in TOGGLES] for p in PROFILES],
       [20, 34, 52] + [13] * len(TOGGLES))

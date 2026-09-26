@@ -10,10 +10,19 @@ same tracked moment throughout, so the numbers agree with the views page.
 Visible on the left of every full-app screenshot on the views page, top to
 bottom:
 
-* **Scenario** — the preset dropdown plus the toggles (hosting, AI, vendor,
-  hardware, pilot/PoC, privacy, integrations). Flip a toggle and the chart,
-  metrics and tracker recompute immediately. A toggle another toggle forces
-  on says so; a toggle that does not apply says when it would.
+* **Scenario** — the preset dropdown, then six collapsible sections that ask
+  about the workload in order: what are you doing, where will it run, is it
+  standard, what data and risk, what external dependencies, who builds and
+  operates it. Each section carries a completion dot (● answered · ◐ a
+  required answer missing · ○ untouched), booleans are explicit Yes/No
+  pairs, and a control that only applies in context (the GenAI cost
+  questions, say) stays hidden until its condition holds — remembering its
+  answer across hide and show. Flip an answer and the chart, metrics and
+  tracker recompute immediately.
+* **Derived by the engine** — chips for the values nobody is asked: the
+  architecture route, the selection route, whether DR or a privacy review is
+  required. Each cites the answers that produced it, and can be overridden
+  with a recorded reason.
 * **Process** — opens the process designer (below).
 * **Waste categories** — one chip per category with its count and removable
   days; click to isolate that category on the chart.

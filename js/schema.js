@@ -144,7 +144,27 @@
        header name, so it imports from column B or column Z alike; written
        after Notes so columns A..Y stay exactly what the source workbook
        expects. */
-    { key: "stage",       header: "Stage",                              type: "text",   confirmed: false, optional: true, aliases: ["Major Phase", "Stage Name"] } // Z
+    { key: "stage",       header: "Stage",                              type: "text",   confirmed: false, optional: true, aliases: ["Major Phase", "Stage Name"] }, // Z
+    /* The rule layer (the v5 specification's §2.3). All optional so every
+       older workbook keeps importing; appended after Stage so A..Z keep
+       their positions. Include Expression is the source of truth for
+       inclusion when present; Applies When stays display-only. */
+    { key: "ruleId",            header: "Rule ID",             type: "text",   confirmed: false, optional: true, aliases: ["RuleID"] },                                     // AA
+    { key: "includeExpression", header: "Include Expression",  type: "text",   confirmed: false, optional: true, aliases: ["IncludeExpression", "Inclusion Expression", "Include Expr"] }, // AB
+    { key: "triggerExplanation", header: "Trigger Explanation", type: "text",  confirmed: false, optional: true, aliases: ["TriggerExplanation", "Why Included"] },          // AC
+    { key: "defaultIncluded",   header: "Default Included",    type: "text",   confirmed: false, optional: true, aliases: ["DefaultIncluded"] },                             // AD
+    { key: "canOverride",       header: "Can Override",        type: "text",   confirmed: false, optional: true, aliases: ["CanOverride"] },                                 // AE
+    { key: "rulePriority",      header: "Rule Priority",       type: "number", confirmed: false, optional: true, aliases: ["RulePriority"] }                                 // AF
+  ];
+
+  /* Named reusable rules (the specification's §2.2): write hard logic once,
+     reference it from any Include Expression by its R_ name. Means and Why It
+     Exists are prose for humans; Expression is compiled by js/expr.js. */
+  const RULES_SHEET = [
+    { key: "id",         header: "Rule ID",       type: "text", required: true, confirmed: false, aliases: ["RuleID", "ID"] },
+    { key: "expression", header: "Expression",    type: "text", required: true, confirmed: false },
+    { key: "means",      header: "Means",         type: "text", optional: true, confirmed: false, aliases: ["Meaning"] },
+    { key: "why",        header: "Why It Exists", type: "text", optional: true, confirmed: false, aliases: ["WhyItExists", "Rationale", "Why"] }
   ];
 
   /* Edges sheet, confirmed. Note the column order: SUCCESSOR first, then
@@ -201,7 +221,17 @@
     { key: "default", header: "Default",   type: "text", optional: true, confirmed: false, aliases: ["Default Value"] },
     { key: "implies", header: "Implies",   type: "text", optional: true, confirmed: false,
       aliases: ["Requires", "Turns On"] },
-    { key: "help",    header: "Help",      type: "text", optional: true, confirmed: false, aliases: ["Notes", "Description"] }
+    { key: "help",    header: "Help",      type: "text", optional: true, confirmed: false, aliases: ["Notes", "Description"] },
+    /* Variables-sheet columns (the specification's §2.1). Section maps a
+       group onto the six-section wizard; Shown When drives progressive
+       disclosure; Derived + Derivation mark values the engine computes. */
+    { key: "section",   header: "Section",     type: "number", optional: true, confirmed: false },
+    { key: "shownWhen", header: "Shown When",  type: "text",   optional: true, confirmed: false, aliases: ["ShownWhen"] },
+    { key: "derived",   header: "Derived",     type: "text",   optional: true, confirmed: false },
+    { key: "derivation", header: "Derivation", type: "text",   optional: true, confirmed: false },
+    { key: "required",  header: "Required",    type: "text",   optional: true, confirmed: false },
+    { key: "overrideRequiresReason", header: "Override Requires Reason", type: "text", optional: true, confirmed: false, aliases: ["OverrideRequiresReason"] },
+    { key: "auditRelevant", header: "Audit Relevant", type: "text", optional: true, confirmed: false, aliases: ["AuditRelevant"] }
   ];
 
   /* Profiles and the matrix have one column per toggle, so their headers are
@@ -247,7 +277,8 @@
     scenarios:   { name: "Discovery Scenarios",  aliases: ["Scenarios"],                           columns: null },
     readme:      { name: "Read Me",              aliases: ["Instructions", "Notes"],   columns: null },
     tracking:    { name: "Tracking",             aliases: ["Status", "Project Tracking", "Task Status"], columns: TRACKING },
-    toggles:     { name: "Toggles",              aliases: ["Levers", "Scenario Toggles", "Switches"], columns: TOGGLES },
+    toggles:     { name: "Toggles",              aliases: ["Levers", "Scenario Toggles", "Switches", "Variables"], columns: TOGGLES },
+    rules:       { name: "Rules",                aliases: ["Named Rules", "Rule Definitions"],        columns: RULES_SHEET },
     profiles:    { name: "Profiles",             aliases: ["Project Profiles", "Scenario Profiles"],  columns: null },
     matrix:      { name: "Scenario Matrix",      aliases: ["Tailoring Matrix", "Matrix", "Applicability Matrix"], columns: null }
   };
@@ -310,7 +341,7 @@
   }
 
   VSM.schema = {
-    TASK, EDGES, ASSUMPTIONS, TRACKING, TOGGLES, PROFILE_FIXED, MATRIX_FIXED,
+    TASK, EDGES, ASSUMPTIONS, TRACKING, TOGGLES, RULES: RULES_SHEET, PROFILE_FIXED, MATRIX_FIXED,
     SHEETS, PICKLISTS, HOURS_PER_DAY,
     norm, matchHeaders, matchValue, sheetByName, unconfirmed, parseCondition, parseCell
   };
