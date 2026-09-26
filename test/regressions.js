@@ -778,5 +778,22 @@ function form(extra = {}) {
     assert.deepEqual(m.headers, r.scenario.matrixSheet.headers);
   });
 
+  await test("1.2.0: links across an excluded step carry bridged + via", () => {
+    const data = dataset([
+      task("a"),
+      task("b", { predecessors: ["a"], when: false }),
+      task("c", { predecessors: ["b"] })
+    ]);
+    const model = build(data);
+    const bridge = model.links.find(l => l.from === "a" && l.to === "c");
+    assert.ok(bridge, "a->c bridge missing");
+    assert.equal(bridge.bridged, true);
+    assert.deepEqual(bridge.via, ["b"]);
+    const plain = build(dataset([task("a"), task("b", { predecessors: ["a"] })]))
+      .links.find(l => l.from === "a" && l.to === "b");
+    assert.equal(plain.bridged, false);
+    assert.equal(plain.via, undefined);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

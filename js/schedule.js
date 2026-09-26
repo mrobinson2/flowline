@@ -229,7 +229,17 @@ VSM.schedule = (function () {
         const auto = a.handoff !== false && pn.owner !== n.owner;
         const isHandoff = explicit || auto;
         const crossOrg = isHandoff && !!pn.team.org && !!n.team.org && pn.team.org !== n.team.org;
-        const link = { from: p, to: n.id, handoff: isHandoff, explicit, crossOrg, fromTeam: pn.team, toTeam: n.team };
+        /* A predecessor that was never declared arrived here through an
+           excluded step (effPreds bridged past it). Mark the link and carry
+           the excluded declared predecessor(s) it stands in for, so the chart
+           can say a dependency was preserved rather than dropped. `via` is the
+           first hop of the bridge; a deeper chain names its entry point. */
+        const declared = predMap.get(n.id) || new Set();
+        const bridged = !declared.has(p);
+        const link = { from: p, to: n.id, handoff: isHandoff, explicit, crossOrg, bridged, fromTeam: pn.team, toTeam: n.team };
+        if (bridged) {
+          link.via = [...declared].filter(x => byId.has(x) && !includedIds.has(x));
+        }
         links.push(link);
         if (isHandoff) n.handoffsIn.push(link);
       });
