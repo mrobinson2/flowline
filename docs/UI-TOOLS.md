@@ -10,10 +10,15 @@ same tracked moment throughout, so the numbers agree with the views page.
 Visible on the left of every full-app screenshot on the views page, top to
 bottom:
 
-* **Scenario** — the preset dropdown plus the toggles (hosting, AI, vendor,
-  hardware, pilot/PoC, privacy, integrations). Flip a toggle and the chart,
-  metrics and tracker recompute immediately. A toggle another toggle forces
-  on says so; a toggle that does not apply says when it would.
+* **Scenario** — the preset dropdown plus the workload facts (hosting, AI,
+  vendor, hardware, lifecycle stage, the data involved, service tier,
+  pattern conformance, integrations). Flip an answer and the chart, metrics
+  and tracker recompute immediately. A toggle another toggle forces on says
+  so; a toggle that does not apply says when it would.
+* **Derived by the engine** — chips for the values nobody is asked: the
+  architecture route, the selection route, whether DR or a privacy review is
+  required. Each cites the answers that produced it, and can be overridden
+  with a recorded reason.
 * **Process** — opens the process designer (below).
 * **Waste categories** — one chip per category with its count and removable
   days; click to isolate that category on the chart.
