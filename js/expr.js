@@ -282,6 +282,57 @@
     return null;
   }
 
+  /* ------------------------------------------------------------------ print
+     A compiled rule back as canonical text, for the admin editor. Shapes the
+     grammar cannot say (numeric comparisons, includesAll, array shorthand,
+     values containing double quotes) throw "not representable" - the editor
+     falls back to showing the JSON. Precedence: OR(1) < AND(2) < NOT(3). */
+  function print(rule) {
+    const bad = what => { throw new Error("not representable as an expression: " + what); };
+    const value = v => {
+      if (typeof v === "boolean") return String(v);
+      const s = String(v);
+      if (/^[A-Za-z0-9_.\-]+$/.test(s) && KEYWORDS.indexOf(s.toUpperCase()) < 0 && !/^(true|false)$/i.test(s)) return s;
+      if (s.indexOf('"') >= 0) bad("a value containing double quotes");
+      return '"' + s + '"';
+    };
+    const list = vs => "[" + vs.map(value).join(", ") + "]";
+    const walk = (r, parent) => {                            // parent = surrounding precedence
+      const paren = (text, mine) => (mine < parent ? "(" + text + ")" : text);
+      if (r === true) return "TRUE";
+      if (r === false) return "FALSE";
+      if (typeof r === "string") return r;
+      if (Array.isArray(r) || r === null || typeof r !== "object") bad(JSON.stringify(r));
+      const keys = Object.keys(r);
+      if (keys.length === 1 && (keys[0] === "all" || keys[0] === "any" || keys[0] === "not")) {
+        if (keys[0] === "not") return paren("NOT " + walk(r.not, 3), 3);
+        const mine = keys[0] === "all" ? 2 : 1;
+        return paren(r[keys[0]].map(x => walk(x, mine)).join(keys[0] === "all" ? " AND " : " OR "), mine);
+      }
+      /* comparison object; several keys mean AND of the pairs */
+      const parts = keys.map(k => {
+        const v = r[k];
+        if (v === true) return k;
+        if (v === false || typeof v === "string" || typeof v === "number") return k + " = " + value(v);
+        if (Array.isArray(v)) bad("the array shorthand on '" + k + "'");
+        if (v === null || typeof v !== "object") bad(JSON.stringify(v));
+        const ops = Object.keys(v);
+        if (ops.length !== 1) bad("several operators on '" + k + "'");
+        const arg = v[ops[0]];
+        switch (ops[0]) {
+          case "ne": return k + " != " + value(arg);
+          case "in": return k + " IN " + list(arg);
+          case "notIn": return k + " NOT IN " + list(arg);
+          case "includes": return k + " INCLUDES " + value(arg);
+          case "includesAny": return k + " INTERSECTS " + list(arg);
+          default: bad("operator '" + ops[0] + "' on '" + k + "'");
+        }
+      });
+      return paren(parts.join(" AND "), parts.length > 1 ? 2 : 4);
+    };
+    return walk(rule, 0);
+  }
+
   function compile(text, attrDefs, ruleIds) {
     const src = String(text === undefined || text === null ? "" : text);
     const { rule, refs, sites } = parse(lex(src), src);
@@ -289,6 +340,6 @@
     return { rule, refs, warnings };
   }
 
-  VSM.expr = { compile, KEYWORDS };
+  VSM.expr = { compile, print, KEYWORDS };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.expr;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

@@ -118,4 +118,38 @@ test("valid checked expressions pass clean", () => {
   assert.equal(checked("ServiceTier IN [Tier0, Tier1] OR InboundInternet").warnings.length, 0);
 });
 
+test("print: canonical text, precedence parens, quoting", () => {
+  const P = V.expr.print;
+  assert.equal(P({ PavedRoad: true }), "PavedRoad");
+  assert.equal(P({ PavedRoad: false }), "PavedRoad = false");
+  assert.equal(P({ HostingTarget: "Azure" }), "HostingTarget = Azure");
+  assert.equal(P({ workType: "Lift and shift" }), 'workType = "Lift and shift"');
+  assert.equal(P({ ServiceTier: { in: ["Tier0", "Tier1"] } }), "ServiceTier IN [Tier0, Tier1]");
+  assert.equal(P({ ServiceTier: { notIn: ["Tier4"] } }), "ServiceTier NOT IN [Tier4]");
+  assert.equal(P({ RuntimeModel: { includes: "PaaS" } }), "RuntimeModel INCLUDES PaaS");
+  assert.equal(P({ RuntimeModel: { includesAny: ["IaaS"] } }), "RuntimeModel INTERSECTS [IaaS]");
+  assert.equal(P({ HostingTarget: { ne: "OnPrem" } }), "HostingTarget != OnPrem");
+  assert.equal(P({ any: [{ a: true }, { all: [{ b: true }, { c: true }] }] }), "a OR b AND c");
+  assert.equal(P({ all: [{ any: [{ a: true }, { b: true }] }, { c: true }] }), "(a OR b) AND c");
+  assert.equal(P({ not: { any: [{ a: true }, { b: true }] } }), "NOT (a OR b)");
+  assert.equal(P("R_ProdBound"), "R_ProdBound");
+  assert.equal(P(true), "TRUE");
+  assert.equal(P(false), "FALSE");
+  assert.equal(P({ a: "1", b: "2" }), "a = 1 AND b = 2");   // multi-key object = AND
+});
+
+test("print round-trips through compile", () => {
+  [{ all: ["R_X", { any: [{ ServiceTier: { in: ["Tier0"] } }, { InboundInternet: true }] }] },
+   { not: { workType: { notIn: ["saas", "cots"] } } },
+   { integrations: { includes: "public-internet" } }
+  ].forEach(r => assert.deepEqual(V.expr.compile(V.expr.print(r)).rule, r));
+});
+
+test("print refuses shapes the grammar cannot say", () => {
+  assert.throws(() => V.expr.print({ x: { gt: 3 } }), /not representable/i);
+  assert.throws(() => V.expr.print({ x: { includesAll: ["a"] } }), /not representable/i);
+  assert.throws(() => V.expr.print({ x: ["a", "b"] }), /not representable/i);
+  assert.throws(() => V.expr.print({ x: 'has "quotes"' }), /not representable/i);
+});
+
 console.log("\n" + passed + " expr tests passed, 0 failed");
