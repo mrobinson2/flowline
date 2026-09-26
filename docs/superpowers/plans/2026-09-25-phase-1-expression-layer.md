@@ -98,7 +98,7 @@ test("rule references and refs collection", () => {
 
 test("the spec's worked examples compile", () => {
   assert.deepEqual(
-    rule("ThirdPartyInvolved = true AND ( NewVendor = true OR VendorHostsOrAccessesData = true OR VendorNeedsGMFAccess = true )".replace("GMF", "Org")),
+    rule("ThirdPartyInvolved = true AND ( NewVendor = true OR VendorHostsOrAccessesData = true OR VendorNeedsOrgAccess = true )"),
     { all: [{ ThirdPartyInvolved: true },
       { any: [{ NewVendor: true }, { VendorHostsOrAccessesData: true }, { VendorNeedsOrgAccess: true }] }] });
   assert.deepEqual(rule("R_MigrationWithSource AND SourceEnvironmentRetired = true"),
@@ -127,7 +127,7 @@ test("syntax errors carry a 1-based column", () => {
 console.log("\n" + passed + " expr tests passed, 0 failed");
 ```
 
-Note the GMF-string replace in the worked-example test — the repo bans that token, so the test constructs it without ever containing it.
+Note the worked example substitutes a neutral organization token — the repo's housekeeping test bans the source company's own, tree-wide.
 
 - [ ] **Step 2: Run, verify failure** — `node test/expr-tests.js` → fails with `V.expr is undefined` (expr.js not created, not loaded).
 
