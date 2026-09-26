@@ -213,6 +213,7 @@ VSM.validate = (function () {
     }
     Object.entries(named).forEach(([id, r]) => checkRule(r, "named rule '" + id + "'", [id]));
     scenarioCfg.attributes.forEach(a => { if (a.enabledWhen !== undefined) checkRule(a.enabledWhen, "scenario attribute '" + a.id + "' enabledWhen", []); });
+    scenarioCfg.attributes.forEach(a => { if (a.shownWhen !== undefined) checkRule(a.shownWhen, "scenario attribute '" + a.id + "' shownWhen", []); });
 
     /* ---------------------------------------------------- presets */
     (scenarioCfg.presets || []).forEach(p => {

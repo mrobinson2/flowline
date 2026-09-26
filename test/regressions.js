@@ -906,5 +906,40 @@ function form(extra = {}) {
     assert.equal(on.nodes.length, 4);
   });
 
+  await test("1.3.0: Variables sheet columns land on the attributes and shownWhen validates", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+        ["1", "P1", "Step", "", "8", "4"]
+      ],
+      "Variables": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default", "Section", "Shown When", "Derived", "Derivation", "Required", "Override Requires Reason"],
+        ["hosting", "Where", "Hosting", "choice", "Azure;OnPrem", "Azure", "2", "Always", "", "", "Yes", ""],
+        ["privateEndpoint", "Network", "Private endpoint", "boolean", "", "No", "5", "hosting = Azure", "Yes", "RuntimeModel includes PaaS", "", "Yes"]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    const attrs = Object.fromEntries(r.scenario.attributes.map(a => [a.id, a]));
+    assert.equal(attrs.hosting.section, 2);
+    assert.equal(attrs.hosting.shownWhen, undefined);              // Always = absent
+    assert.equal(attrs.hosting.required, true);
+    assert.deepEqual(attrs.privateEndpoint.shownWhen, { hosting: "Azure" });
+    assert.equal(attrs.privateEndpoint.derived, true);
+    assert.equal(attrs.privateEndpoint.derivation, "RuntimeModel includes PaaS");
+    assert.equal(attrs.privateEndpoint.overrideRequiresReason, true);
+    assert.equal(V.validate.run(r.process, r.taxonomy, r.scenario).errors.length, 0,
+      JSON.stringify(V.validate.run(r.process, r.taxonomy, r.scenario).errors));
+    /* a shownWhen naming a ghost attribute warns at import and ships without it */
+    const bad = JSON.parse(JSON.stringify(sheets));
+    bad.Variables[2][7] = "hostng = Azure";
+    const r2 = V.import.fromSheets(bad, {});
+    assert.ok(r2.report.warnings.some(w => /privateEndpoint/.test(w) && /hostng/.test(w)),
+      JSON.stringify(r2.report.warnings));
+    const pe2 = r2.scenario.attributes.find(a => a.id === "privateEndpoint");
+    assert.equal(pe2.shownWhen, undefined, "a broken shownWhen must not ship");
+    assert.equal(V.validate.run(r2.process, r2.taxonomy, r2.scenario).errors.length, 0);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

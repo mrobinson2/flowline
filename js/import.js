@@ -203,6 +203,17 @@
         help: txt(r.help) || undefined,
         implies: txt(r.implies).split(/\s*[;,]\s*/).map(s => s.trim()).filter(Boolean)
       };
+      /* Variables-sheet columns: wizard section, progressive disclosure, and
+         the derivation flags the later engine phases consume. Shown When is
+         raw text here; it compiles once the whole vocabulary is read. */
+      const yes = v => /^(y|yes|true|1|on)$/i.test(txt(v));
+      if (num(r.section) !== null) t.section = num(r.section);
+      if (txt(r.shownWhen)) t.shownWhenText = txt(r.shownWhen);
+      if (yes(r.derived)) t.derived = true;
+      if (txt(r.derivation)) t.derivation = txt(r.derivation);
+      if (yes(r.required)) t.required = true;
+      if (yes(r.overrideRequiresReason)) t.overrideRequiresReason = true;
+      if (yes(r.auditRelevant)) t.auditRelevant = true;
       if (type === "enum" || type === "multi") {
         if (!optionList.length) { report.warnings.push("Toggle '" + id + "' is a choice but lists no options; treated as a yes/no switch."); t.type = "boolean"; }
         else t.options = optionList.map(v => ({ value: v, label: v }));
@@ -477,6 +488,22 @@
 
     /* ---- tailoring: the three tabs if present, the Applies When phrases if not */
     const toggles = readToggles(found.toggles, report);
+    /* Shown When compiles against the FULL vocabulary, so it runs after every
+       toggle is read. "Always" (and blank) means always visible; "Diagnostic
+       mode only" is a flag the diagnostic view reads, not a rule. A broken
+       expression warns and the control stays visible - hiding a control over
+       a typo would silently freeze its default into every scenario. */
+    if (toggles) {
+      toggles.forEach(t => {
+        if (!t.shownWhenText) return;
+        const sw = t.shownWhenText;
+        delete t.shownWhenText;
+        if (/^always$/i.test(sw)) return;
+        if (/^diagnostic mode only$/i.test(sw)) { t.diagnosticOnly = true; return; }
+        try { t.shownWhen = VSM.expr.compile(sw, toggles, []).rule; }
+        catch (e) { report.warnings.push("Toggle '" + t.id + "': Shown When: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". The control stays visible."); }
+      });
+    }
     const profiles = toggles ? readProfiles(found.profiles, toggles, report) : null;
     const matrix = toggles ? readMatrix(found.matrix, toggles, report) : null;
     if (toggles && !matrix) report.warnings.push("A Toggles tab was found but no usable Scenario Matrix, so no task is tied to any toggle yet.");
@@ -801,6 +828,14 @@
           if (t.options) a.options = t.options;
           if (t.help) a.help = t.help;
           if (t.implies && t.implies.length) a.implies = t.implies;
+          if (t.section !== undefined) a.section = t.section;
+          if (t.shownWhen !== undefined) a.shownWhen = t.shownWhen;
+          if (t.diagnosticOnly) a.diagnosticOnly = true;
+          if (t.derived) a.derived = true;
+          if (t.derivation) a.derivation = t.derivation;
+          if (t.required) a.required = true;
+          if (t.overrideRequiresReason) a.overrideRequiresReason = true;
+          if (t.auditRelevant) a.auditRelevant = true;
           return a;
         }).concat(extra),
         rules: Object.assign(Object.create(null), matrix ? {} : namedRules, sheetRules),
