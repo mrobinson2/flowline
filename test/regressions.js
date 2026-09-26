@@ -763,5 +763,20 @@ function form(extra = {}) {
     assert.equal(r.process.activities.find(a => a.id === "1").noEstimate, undefined);
   });
 
+  await test("1.2.0: Scenario Matrix round-trips through the Task List export", async () => {
+    const buf = fs.readFileSync(path.join(__dirname, "..", "fixture", "sample-value-stream.xlsx"));
+    const r = await V.import.fromWorkbook(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {});
+    assert.equal(r.report.errors.length, 0);
+    assert.ok(r.scenario.matrixSheet, "importer did not retain the matrix sheet");
+    assert.ok(r.scenario.matrixSheet.rows.length >= 100, "matrix rows missing");
+    const model = V.schedule.build(r.process, r.taxonomy,
+      V.rules.defaults(r.scenario.attributes), r.scenario.rules, r.scenario.attributes);
+    const out = V.exportWorkbook.sheets(model, { scenarioCfg: r.scenario, scenarioSummary: "" });
+    const m = out.find(s => s.name === "Scenario Matrix");
+    assert.ok(m, "export writes no Scenario Matrix sheet");
+    assert.equal(m.rows.length, r.scenario.matrixSheet.rows.length);
+    assert.deepEqual(m.headers, r.scenario.matrixSheet.headers);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

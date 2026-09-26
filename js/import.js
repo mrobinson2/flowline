@@ -746,6 +746,16 @@
         presets: (profiles || []).map(p => ({ id: p.id, label: p.label, description: p.description, set: p.set, partial: true })),
         groups: [...new Set(toggles.map(t => t.group))]
       };
+      /* Keep the Scenario Matrix sheet verbatim so the export can write it
+         back. Without this, one export/import cycle silently strips every
+         task's tailoring. In-app rule edits do not rewrite it (the admin
+         editor will own that); the Export Notes sheet says so. */
+      if (matrix && found.matrix) {
+        scenario.matrixSheet = {
+          headers: found.matrix.matrix[0].map(txt),
+          rows: found.matrix.matrix.slice(1).filter(row => txt(row[0]) !== "")
+        };
+      }
       if (matrix) {
         scenario.presets.push({
           id: "full-scope", label: "Full scope (every step that could apply)",
