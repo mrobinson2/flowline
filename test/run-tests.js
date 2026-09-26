@@ -341,15 +341,28 @@ function section(t) { results.push("\n" + t); }
   ["Global Architecture Council", "SRD Review", "Routing & Access Controls (RAC)", "OKTA SSO integration"].forEach(n =>
     ok("company-specific name gone: " + n, names.indexOf(n) < 0));
 
+  /* the §8.6 split: SSO went to Identity, the internet/proxy/private chips
+     went to Network & Exposure; integrations keeps the endpoint types */
   const opts = (sd.scenario.attributes.find(a => a.id === "integrations").options || []).map(o => o.label);
-  ["Core systems integration", "API gateway", "Data warehouse", "SSO", "Public Internet",
-   "Private Network (Internal Only)", "Web Proxy", "Managed file transfer"].forEach(l =>
+  ["Core systems integration", "API gateway", "Data warehouse", "Managed file transfer"].forEach(l =>
     ok("integration option: " + l, opts.indexOf(l) >= 0));
+  ["SSO", "Public Internet", "Web Proxy"].forEach(l =>
+    ok("moved off integrations: " + l, opts.indexOf(l) < 0));
   ok("every integration option drives at least one activity", (() => {
     const none = runP({ integrations: [] }).nodes.length;
     return (sd.scenario.attributes.find(a => a.id === "integrations").options || [])
       .every(o => runP({ integrations: [o.value] }).nodes.length > none);
   })(), "an option that changes nothing is a control that lies");
+  ok("inbound and outbound internet drive different work", (() => {
+    const base = runP({ network: [] }).nodes.length;
+    const inb = runP({ network: ["inbound-internet"] });
+    const outb = runP({ network: ["outbound-internet"] });
+    return inb.nodes.length > base && outb.nodes.length > base
+      && inb.nodes.some(n => n.id === "int-internet") && !inb.nodes.some(n => n.id === "int-web-proxy")
+      && outb.nodes.some(n => n.id === "int-web-proxy") && !outb.nodes.some(n => n.id === "int-internet");
+  })());
+  ok("sso-federation on the identity group drives the SSO integration",
+    runP({ identity: ["sso-federation"] }).nodes.some(n => n.id === "int-sso"));
 
   /* A repo that ships as a template should not carry one company's internal
      names. This walks the source tree rather than the model, so it also

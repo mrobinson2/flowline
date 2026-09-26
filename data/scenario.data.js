@@ -4,13 +4,17 @@
    Everything between the outer { } is plain JSON.
 
    attributes : each entry becomes a control. Types:
-                  "boolean"  -> on/off switch
+                  "boolean"  -> Yes/No choice
                   "enum"     -> single choice
                   "multi"    -> multi-select
-                "group"       puts the control under a heading
+                "section"     1..6: which wizard section the control lives in
+                              (1 What are you doing? 2 Where will it run?
+                               3 Is it standard? 4 Data and risk?
+                               5 External dependencies? 6 Who builds/runs it?)
+                "group"       puts the control under a heading inside its section
                 "enabledWhen" greys the control out unless the rule matches
-                "disabledValue" is what a greyed-out control contributes to
-                              rules, so a forced-on control stays on
+                "shownWhen"   hides it entirely until the rule matches; hidden
+                              values are kept, not evaluated, and restored
                 "derived"     the ENGINE computes this one (see "derive"); the
                               panel shows it as a chip with its reasons, and a
                               person can override it - with a recorded reason
@@ -21,12 +25,12 @@
 
    THE DESIGN RULE (the v5 specification's first principle): the user
    describes the workload; the engine decides the work. Nobody is asked "do
-   you need a privacy review?" - they say what data is involved, and
-   regulatedData derives. Nobody picks an architecture lane - pattern facts
-   and the service tier derive it, and overriding it leaves a reason behind.
+   you need a privacy review?" - they say what data is involved. Nobody picks
+   an architecture lane - pattern facts and the service tier derive it.
 
-   Activities reference attribute ids in their "when" rules, e.g.
-     "when": { "hosting": "cloud", "aiWorkload": true }
+   Some options here are vocabulary-first: runtime model, delivery ownership
+   and most identity choices describe the workload for exports and future
+   rules without yet driving a sample activity. Their help text says so.
    ========================================================================== */
 VSM.register("scenario", {
   "attributes": [
@@ -47,24 +51,8 @@ VSM.register("scenario", {
       ]
     },
 
-    {
-      "id": "hosting", "group": "Platform", "label": "Hosting", "type": "enum", "default": "cloud",
-      "options": [
-        { "value": "cloud",   "label": "Cloud" },
-        { "value": "on-prem", "label": "On-Premises" }
-      ]
-    },
-    { "id": "aiWorkload", "group": "Platform", "label": "AI workload", "type": "boolean", "default": false },
-
-    { "id": "newVendor", "group": "Sourcing", "label": "New vendor involved", "type": "boolean", "default": false },
-    { "id": "hardwareProcurement", "group": "Sourcing", "label": "Hardware procurement", "type": "boolean", "default": true,
-      "enabledWhen": { "hosting": "on-prem" } },
-
-    /* -------- what stage of life is this work, and does it reach production?
-       This pair replaces the old "Pilot / PoC workload" switch, which mixed
-       two facts: a PoC proves a hypothesis, a pilot runs limited real use,
-       and EITHER may or may not include production controls. */
-    { "id": "lifecycleStage", "group": "Scope & Risk", "label": "Lifecycle stage", "type": "enum", "default": "new-prod",
+    /* ================================================= 1 What are you doing? */
+    { "id": "lifecycleStage", "section": 1, "group": "Lifecycle", "label": "Lifecycle stage", "type": "enum", "default": "new-prod",
       "options": [
         { "value": "poc",          "label": "Proof of concept" },
         { "value": "pilot",        "label": "Pilot" },
@@ -74,14 +62,63 @@ VSM.register("scenario", {
         { "value": "migration",    "label": "Migration / modernization" },
         { "value": "retirement",   "label": "Retirement" }
       ] },
-    { "id": "productionIncluded", "group": "Scope & Risk", "label": "Production deployment included", "type": "boolean", "default": true,
+    { "id": "productionIncluded", "section": 1, "group": "Lifecycle", "label": "Production deployment included", "type": "boolean", "default": true,
       "help": "A PoC or pilot usually leaves this off - and with it goes DR design, the DR environment and the failover test." },
 
-    /* -------- what data is involved. The person describes the data; the
-       engine decides whether a privacy review is required (regulatedData,
-       below). The old "Data Privacy Review" toggle asked the user to perform
-       that derivation in their head. */
-    { "id": "dataScope", "group": "Scope & Risk", "label": "Data involved", "type": "multi",
+    /* ========================================= 2 Where and how will it run? */
+    { "id": "hosting", "section": 2, "group": "Platform", "label": "Hosting target", "type": "enum", "default": "azure",
+      "help": "Bare “Cloud” is deliberately not an option: it would fire Azure-specific landing-zone work for an AWS workload.",
+      "options": [
+        { "value": "azure",             "label": "Azure" },
+        { "value": "aws",               "label": "AWS" },
+        { "value": "gcp",               "label": "GCP" },
+        { "value": "on-prem",           "label": "On-Premises" },
+        { "value": "saas-vendor",       "label": "SaaS / vendor-hosted" },
+        { "value": "hybrid",            "label": "Hybrid / multi-environment" },
+        { "value": "existing-platform", "label": "Existing enterprise platform" }
+      ] },
+    { "id": "runtimeModel", "section": 2, "group": "Platform", "label": "Runtime / service model", "type": "multi", "default": ["paas"],
+      "help": "Vocabulary-first: describes the workload for exports and rules. The sample binds only the private-endpoint derivation to it so far.",
+      "options": [
+        { "value": "iaas",            "label": "IaaS / virtual machines" },
+        { "value": "containers",      "label": "Containers / Kubernetes" },
+        { "value": "paas",            "label": "PaaS / managed service" },
+        { "value": "serverless",      "label": "Serverless" },
+        { "value": "data-platform",   "label": "Database / data platform" },
+        { "value": "physical",        "label": "Physical infrastructure" },
+        { "value": "vendor-hosted",   "label": "Vendor-hosted SaaS" },
+        { "value": "shared-platform", "label": "Existing shared platform" }
+      ] },
+    { "id": "aiWorkload", "section": 2, "group": "AI", "label": "AI / ML workload", "type": "boolean", "default": false },
+    { "id": "genAiWorkload", "section": 2, "group": "AI", "label": "Generative AI workload", "type": "boolean", "default": false,
+      "help": "Generative AI carries its own approval path beyond traditional ML." },
+    { "id": "genAiMonthlyCostOver1k", "section": 2, "group": "AI", "label": "GenAI run-rate over $1k/month", "type": "boolean", "default": false,
+      "shownWhen": { "genAiWorkload": true } },
+    { "id": "azureOpenAiPolicyException", "section": 2, "group": "AI", "label": "Model policy exception required", "type": "boolean", "default": false,
+      "shownWhen": { "genAiWorkload": true } },
+
+    /* ==================================================== 3 Is it standard? */
+    { "id": "approvedPatternExists", "section": 3, "group": "Pattern", "label": "An approved pattern exists", "type": "boolean", "default": true },
+    { "id": "patternConforms", "section": 3, "group": "Pattern", "label": "The design conforms to the pattern", "type": "boolean", "default": true,
+      "enabledWhen": { "approvedPatternExists": true } },
+    { "id": "newTechnology", "section": 3, "group": "Pattern", "label": "New technology for the organization", "type": "boolean", "default": false },
+    { "id": "newEnterprisePlatform", "section": 3, "group": "Pattern", "label": "New enterprise platform / shared service", "type": "boolean", "default": false },
+    { "id": "architectureDeviation", "section": 3, "group": "Pattern", "label": "Deviation from architecture standards", "type": "boolean", "default": false },
+
+    { "id": "requirementsUnderstood", "section": 3, "group": "Selection facts", "label": "Requirements sufficiently understood", "type": "boolean", "default": true },
+    { "id": "vendorLandscapeKnown", "section": 3, "group": "Selection facts", "label": "Vendor landscape known", "type": "boolean", "default": true },
+    { "id": "candidateProductCount", "section": 3, "group": "Selection facts", "label": "Plausible candidate products", "type": "enum", "default": "1",
+      "options": [
+        { "value": "1",       "label": "One clear candidate" },
+        { "value": "2-3",     "label": "Two or three" },
+        { "value": "4-6",     "label": "Four to six" },
+        { "value": "unknown", "label": "Unknown" }
+      ] },
+    { "id": "competitiveSourcing", "section": 3, "group": "Selection facts", "label": "Competitive sourcing required", "type": "boolean", "default": false },
+    { "id": "unprovenTechnicalClaim", "section": 3, "group": "Selection facts", "label": "An unproven technical claim must be tested", "type": "boolean", "default": false },
+
+    /* ======================================= 4 What data and business risk? */
+    { "id": "dataScope", "section": 4, "group": "Data", "label": "Data involved", "type": "multi", "required": true,
       "default": ["customer-personal"],
       "help": "The shipped sample assumes customer personal data, which is what keeps the privacy work in the default map. Describe your own workload's data and the reviews follow.",
       "options": [
@@ -97,11 +134,7 @@ VSM.register("scenario", {
         { "value": "retention",              "label": "Records-management retention" },
         { "value": "ai-training",            "label": "AI training / grounding data" }
       ] },
-
-    /* -------- service criticality. THE single largest gap the specification
-       called out: the tier drives DR, HA, support model, performance
-       validation - all derived below rather than asked one by one. */
-    { "id": "serviceTier", "group": "Scope & Risk", "label": "Service tier", "type": "enum", "default": "Tier 3",
+    { "id": "serviceTier", "section": 4, "group": "Criticality", "label": "Service tier", "type": "enum", "default": "Tier 3", "required": true,
       "help": "Tier 0 is the most critical. 'Not yet determined' leaves the tier-driven controls at their defaults - decide it before go-live.",
       "options": [
         { "value": "Tier 0", "label": "Tier 0" },
@@ -112,43 +145,79 @@ VSM.register("scenario", {
         { "value": "tbd",    "label": "Not yet determined" }
       ] },
 
-    /* -------- pattern and novelty facts: the inputs the architecture lane
-       derives from. The lane itself is not a question (spec §4 group 4). */
-    { "id": "approvedPatternExists", "group": "Is it standard?", "label": "An approved pattern exists", "type": "boolean", "default": true },
-    { "id": "patternConforms", "group": "Is it standard?", "label": "The design conforms to the pattern", "type": "boolean", "default": true,
-      "enabledWhen": { "approvedPatternExists": true } },
-    { "id": "newTechnology", "group": "Is it standard?", "label": "New technology for the organization", "type": "boolean", "default": false },
-    { "id": "newEnterprisePlatform", "group": "Is it standard?", "label": "New enterprise platform / shared service", "type": "boolean", "default": false },
-    { "id": "architectureDeviation", "group": "Is it standard?", "label": "Deviation from architecture standards", "type": "boolean", "default": false },
+    /* ================================== 5 What external dependencies exist? */
+    { "id": "thirdPartyInvolved", "section": 5, "group": "Sourcing", "label": "A third party is involved", "type": "boolean", "default": false },
+    { "id": "newVendor", "section": 5, "group": "Sourcing", "label": "New vendor to the organization", "type": "boolean", "default": false },
+    { "id": "existingApprovedVendor", "section": 5, "group": "Sourcing", "label": "Existing approved vendor", "type": "boolean", "default": false },
+    { "id": "hardwareProcurement", "section": 5, "group": "Sourcing", "label": "Hardware purchase", "type": "boolean", "default": true,
+      "enabledWhen": { "hosting": "on-prem" } },
+    { "id": "softwareLicense", "section": 5, "group": "Sourcing", "label": "New or expanded software license", "type": "boolean", "default": false },
+    { "id": "professionalServices", "section": 5, "group": "Sourcing", "label": "Professional services / SOW", "type": "boolean", "default": false },
+    { "id": "vendorNeedsOrgAccess", "section": 5, "group": "Sourcing", "label": "Vendor people need internal access", "type": "boolean", "default": false },
+    { "id": "vendorHostsOrAccessesData", "section": 5, "group": "Sourcing", "label": "Vendor hosts or accesses our data", "type": "boolean", "default": false },
+    { "id": "managedService", "section": 5, "group": "Sourcing", "label": "Managed service", "type": "boolean", "default": false },
+    { "id": "contractChangeRequired", "section": 5, "group": "Sourcing", "label": "Contract / MSA change required", "type": "boolean", "default": false },
+    { "id": "soleSource", "section": 5, "group": "Sourcing", "label": "Sole-source route", "type": "boolean", "default": false },
 
-    /* -------- selection facts: the inputs the selection route derives from.
-       RFI / RFP / PoC are not questions either (spec §4 group 5). */
-    { "id": "requirementsUnderstood", "group": "Sourcing", "label": "Requirements sufficiently understood", "type": "boolean", "default": true },
-    { "id": "vendorLandscapeKnown", "group": "Sourcing", "label": "Vendor landscape known", "type": "boolean", "default": true },
-    { "id": "candidateProductCount", "group": "Sourcing", "label": "Plausible candidate products", "type": "enum", "default": "1",
+    { "id": "identity", "section": 5, "group": "Identity & Access", "label": "Identity & Access", "type": "multi", "default": [],
+      "help": "The sample binds SSO / federation; the rest describe the workload for exports and future rules.",
       "options": [
-        { "value": "1",       "label": "One clear candidate" },
-        { "value": "2-3",     "label": "Two or three" },
-        { "value": "4-6",     "label": "Four to six" },
-        { "value": "unknown", "label": "Unknown" }
+        { "value": "workforce",          "label": "Workforce user access" },
+        { "value": "customer-identity",  "label": "Customer identity" },
+        { "value": "partner-external",   "label": "Partner / external users" },
+        { "value": "sso-federation",     "label": "SSO / federation" },
+        { "value": "role-group-based",   "label": "Role / group-based access" },
+        { "value": "privileged",         "label": "Privileged access" },
+        { "value": "service-account",    "label": "Service account / machine identity" },
+        { "value": "m2m-api",            "label": "M2M / API authentication" },
+        { "value": "secrets-vaulting",   "label": "Secrets / key management" },
+        { "value": "access-certification", "label": "Access certification" },
+        { "value": "vendor-personnel",   "label": "Vendor personnel access" }
       ] },
-    { "id": "competitiveSourcing", "group": "Sourcing", "label": "Competitive sourcing required", "type": "boolean", "default": false },
-    { "id": "unprovenTechnicalClaim", "group": "Sourcing", "label": "An unproven technical claim must be tested", "type": "boolean", "default": false },
 
     {
-      "id": "integrations", "group": "Integrations & Connectivity", "label": "Integrations & Connectivity",
+      "id": "integrations", "section": 5, "group": "Integrations", "label": "Integrations",
       "type": "multi", "default": [],
       "options": [
-        { "value": "core-services",   "label": "Core systems integration" },
-        { "value": "api-gateway",     "label": "API gateway" },
-        { "value": "data-warehouse",  "label": "Data warehouse" },
-        { "value": "sso",             "label": "SSO" },
-        { "value": "public-internet", "label": "Public Internet" },
-        { "value": "private-network", "label": "Private Network (Internal Only)" },
-        { "value": "web-proxy",       "label": "Web Proxy" },
-        { "value": "mft",             "label": "Managed file transfer" }
+        { "value": "core-services",  "label": "Core systems integration" },
+        { "value": "api-gateway",    "label": "API gateway" },
+        { "value": "data-warehouse", "label": "Data warehouse" },
+        { "value": "mft",            "label": "Managed file transfer" }
       ]
     },
+
+    { "id": "network", "section": 5, "group": "Network & Exposure", "label": "Network & Exposure", "type": "multi", "default": [],
+      "help": "Inbound exposure and outbound dependency are split on purpose: one earns the WAF and exposure review, the other earns proxy allowlisting.",
+      "options": [
+        { "value": "inbound-internet",     "label": "Public internet inbound" },
+        { "value": "outbound-internet",    "label": "Public internet outbound" },
+        { "value": "private-connectivity", "label": "Private connectivity (internal only)" },
+        { "value": "hybrid-connectivity",  "label": "Hybrid / on-premises connectivity" },
+        { "value": "load-balancer",        "label": "Load balancer required" },
+        { "value": "firewall-change",      "label": "Firewall rules required" },
+        { "value": "dns-ipam",             "label": "DNS / IPAM required" },
+        { "value": "certificate-pki",      "label": "Certificate / PKI required" }
+      ] },
+
+    /* ================================== 6 Who builds and operates it? */
+    { "id": "deliveryOwnership", "section": 6, "group": "Delivery model", "label": "Delivery ownership", "type": "enum", "default": "internal",
+      "help": "Vendor or joint delivery pulls vendor onboarding in.",
+      "options": [
+        { "value": "internal",        "label": "Internal team delivered" },
+        { "value": "vendor",          "label": "Vendor delivered" },
+        { "value": "joint",           "label": "Joint internal / vendor" },
+        { "value": "managed-service", "label": "Managed service" },
+        { "value": "self-service",    "label": "Platform self-service" }
+      ] },
+    { "id": "supportModel", "section": 6, "group": "Delivery model", "label": "Production support model", "type": "enum", "default": "stream-aligned",
+      "help": "Vocabulary-first: recorded with the scenario and exports; the sample's run activities are unconditional.",
+      "options": [
+        { "value": "stream-aligned", "label": "Stream-aligned team owns operations" },
+        { "value": "platform-sre",   "label": "Platform / SRE-supported" },
+        { "value": "central-ops",    "label": "Central operations" },
+        { "value": "vendor",         "label": "Vendor-supported" },
+        { "value": "shared",         "label": "Shared support model" }
+      ] },
 
     /* ======================================================================
        DERIVED ATTRIBUTES. Everything below is computed, in this order, from
@@ -177,6 +246,17 @@ VSM.register("scenario", {
     { "id": "performanceValidationRequired", "group": "Derived", "label": "Performance validation required", "type": "boolean", "default": true,
       "derived": true,
       "derive": { "when": { "serviceTier": { "in": ["Tier 0", "Tier 1", "Tier 2", "Tier 3"] } } } },
+
+    /* network consequences (spec §5.10) */
+    { "id": "wafRequired", "group": "Derived", "label": "WAF / exposure review required", "type": "boolean", "default": false,
+      "derived": true,
+      "derive": { "when": { "network": { "includes": "inbound-internet" } } } },
+    { "id": "proxyAllowlisting", "group": "Derived", "label": "Proxy / egress allowlisting", "type": "boolean", "default": false,
+      "derived": true,
+      "derive": { "when": { "network": { "includes": "outbound-internet" } } } },
+    { "id": "privateEndpoint", "group": "Derived", "label": "Private endpoint design", "type": "boolean", "default": true,
+      "derived": true,
+      "derive": { "when": { "runtimeModel": { "includes": "paas" } } } },
 
     { "id": "architectureLane", "group": "Derived", "label": "Architecture route", "type": "enum", "default": "fast",
       "derived": true, "overrideRequiresReason": true,
@@ -237,12 +317,14 @@ VSM.register("scenario", {
   /* --------------------------------------------------------------------------
      NAMED RULES. Write a policy once here, then reference it by name from any
      activity:  "when": "drRequired"
-     The IDS are unchanged from 1.1 - activities did not have to be touched -
-     but the BODIES now point at derived attributes, which is the §8.5
-     dissolution: the engine decides, the rule names the decision.
+     Ids that activities referenced in 1.1 are unchanged; the hosting split
+     changes what "cloud" MEANS (any hyperscaler) and adds "azure" for the
+     rows that are genuinely Azure-specific - the exact misfire §8.2 warns
+     about when everything hangs off one bare Cloud switch.
      -------------------------------------------------------------------------- */
   "rules": {
-    "cloud":            { "hosting": "cloud" },
+    "cloud":            { "hosting": { "in": ["azure", "aws", "gcp", "hybrid"] } },
+    "azure":            { "hosting": "azure" },
     "onPrem":           { "hosting": "on-prem" },
     "aiWorkload":       { "aiWorkload": true },
     "newVendor":        { "newVendor": true },
@@ -254,9 +336,15 @@ VSM.register("scenario", {
     /* DR follows the service tier and production intent, not a pilot switch */
     "drRequired":       { "drRequired": true },
 
+    /* spec §2.2's R_ThirdPartyRisk: a third party, AND it is new or touches
+       our data or our systems. An existing vendor's services engagement does
+       not re-run TPRM by itself. */
+    "thirdPartyRisk":   { "all": [{ "thirdPartyInvolved": true },
+                                   { "any": [{ "newVendor": true }, { "vendorHostsOrAccessesData": true }, { "vendorNeedsOrgAccess": true }] }] },
+
     /* A penetration test is warranted by AI, by privacy-relevant data, or by
        anything reachable from the internet. */
-    "deepSecurity":     { "any": [ "aiWorkload", "privacyReview", { "integrations": { "includes": "public-internet" } } ] },
+    "deepSecurity":     { "any": [ "aiWorkload", "privacyReview", { "network": { "includes": "inbound-internet" } } ] },
 
     /* the Fast Lane inherits its reviews from the pattern; Standard and
        Custom earn the Architecture Review Board */
@@ -275,25 +363,27 @@ VSM.register("scenario", {
 
   /* --------------------------------------------------------------------------
      PROFILES. Each declares its work type, the sourcing facts that follow
-     from it, and now the PATTERN facts the architecture lane derives from
-     (spec §1's suggested mappings). Everything else - hosting, AI, data,
-     tier, integrations - is a modifier: set it once and it survives every
-     profile change.
+     from it, and the PATTERN facts the architecture lane derives from.
+     Everything else - hosting, AI, data, tier, identity, network - is a
+     modifier: set it once and it survives every profile change.
      -------------------------------------------------------------------------- */
   "presets": [
     { "id": "adopt-saas", "label": "Adopt SaaS", "partial": true,
       "description": "Vendor-hosted service. No build, no environments of ours to stand up.",
       "set": { "workType": "saas", "newVendor": true, "hardwareProcurement": false,
+               "thirdPartyInvolved": true, "vendorHostsOrAccessesData": true,
                "approvedPatternExists": false, "patternConforms": false } },
 
     { "id": "deploy-cots", "label": "Deploy COTS", "partial": true,
       "description": "Buy the product, deploy and run it ourselves.",
       "set": { "workType": "cots", "newVendor": true,
+               "thirdPartyInvolved": true, "softwareLicense": true,
                "approvedPatternExists": false, "patternConforms": false } },
 
     { "id": "build-paved", "label": "Build on Paved Road", "partial": true,
       "description": "New build on a pre-approved pattern from the catalog.",
       "set": { "workType": "paved", "newVendor": false, "hardwareProcurement": false,
+               "thirdPartyInvolved": false,
                "approvedPatternExists": true, "patternConforms": true, "architectureDeviation": false } },
 
     { "id": "build-custom", "label": "Build Custom / Non-Standard", "partial": true,

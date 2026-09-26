@@ -1102,5 +1102,59 @@ function form(extra = {}) {
     assert.equal(s.pilotPoc, undefined, "a retired attribute id must not ride along");
   });
 
+  await test("1.3.0: vocabulary v2 - hosting split, network split, sourcing facts", () => {
+    const OLD_DEFAULT_IDS = ["arch-design","biz-case","cab","cloud-cost-approval","cloud-env-dev","cloud-iac","cloud-iam","cloud-landing-zone","cloud-network","cloud-subscription","code-review","data-class","dba-provision","defect-rework","deploy-prod","dev-build","dr-design","dr-env-cloud","dr-test","go-live","hypercare","intake","intake-triage","kickoff","ops-readiness","pen-test","perf-test","privacy-review","privacy-signoff","qa-env-wait","qa-test","release-window","sast","sec-attest","sec-design-review","sec-findings-rework","sizing","threat-model","uat"];
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    /* the default map survives its third vocabulary change */
+    const dft = build2();
+    assert.equal(JSON.stringify(dft.nodes.map(n => n.id).sort()), JSON.stringify(OLD_DEFAULT_IDS));
+    assert.equal(dft.metrics.currentElapsed, 198);
+    /* §8.2: bare "Cloud" is retired; AWS keeps generic cloud work and drops the Azure-specific rows */
+    const hosting = d.scenario.attributes.find(a => a.id === "hosting");
+    assert.ok(!hosting.options.some(o => o.value === "cloud"), "bare Cloud must be retired");
+    assert.ok(hosting.options.length >= 6, "hosting gains the split targets");
+    const aws = build2({ hosting: "aws" });
+    ["cloud-network", "cloud-iac", "cloud-cost-approval", "cloud-env-dev"].forEach(id =>
+      assert.ok(aws.nodes.some(n => n.id === id), id + " is generic cloud work and must survive AWS"));
+    ["cloud-subscription", "cloud-landing-zone", "cloud-iam", "gpu-quota"].forEach(id =>
+      assert.ok(!aws.nodes.some(n => n.id === id), id + " is Azure-specific and must drop on AWS"));
+    /* §8.6: inbound exposure and outbound dependency are different consequences */
+    const inb = build2({ network: ["inbound-internet"] });
+    assert.ok(inb.nodes.some(n => n.id === "int-internet"), "inbound triggers the exposure/WAF review");
+    assert.ok(!inb.nodes.some(n => n.id === "int-web-proxy"), "inbound alone must not trigger the proxy");
+    assert.equal(inb.derived.provenance.wafRequired.value, true);
+    const outb = build2({ network: ["outbound-internet"] });
+    assert.ok(outb.nodes.some(n => n.id === "int-web-proxy"), "outbound triggers proxy allowlisting");
+    assert.ok(!outb.nodes.some(n => n.id === "int-internet"), "outbound alone must not trigger the exposure review");
+    assert.equal(outb.derived.provenance.proxyAllowlisting.value, true);
+    /* §8.4's common real case: an existing vendor's people need access - SOW
+       and onboarding, but no new-vendor contracting and no product selection */
+    const svc = build2({ thirdPartyInvolved: true, vendorNeedsOrgAccess: true, professionalServices: true });
+    assert.ok(svc.nodes.some(n => n.id === "vendor-onboard"), "access -> onboarding");
+    assert.ok(svc.nodes.some(n => n.id === "vendor-risk"), "third party with access -> risk assessment");
+    assert.ok(!svc.nodes.some(n => n.id === "vendor-contract"), "no new vendor, no contract negotiation");
+    assert.ok(!svc.nodes.some(n => n.id === "vendor-rfp"), "no product selection for a services engagement");
+    /* the SaaS profile still lights its vendor chain through the new facts */
+    const saas = d.scenario.presets.find(p => p.id === "adopt-saas");
+    const saasModel = build2(saas.set);
+    ["vendor-rfp", "vendor-risk", "vendor-contract"].forEach(id =>
+      assert.ok(saasModel.nodes.some(n => n.id === id), id + " must fire for SaaS adoption"));
+    /* identity is its own vocabulary now */
+    assert.ok(!d.scenario.attributes.find(a => a.id === "integrations").options.some(o => /sso|internet|proxy|private/i.test(o.value)),
+      "sso and the network chips leave the integrations group");
+    const sso = build2({ identity: ["sso-federation"] });
+    assert.ok(sso.nodes.some(n => n.id === "int-sso"), "sso-federation drives the SSO integration");
+    /* §8.3: the GenAI split, with its dependents disclosed only when it is on */
+    const genAI = d.scenario.attributes.find(a => a.id === "genAiWorkload");
+    assert.ok(genAI, "genAiWorkload exists");
+    const dep = d.scenario.attributes.find(a => a.id === "genAiMonthlyCostOver1k");
+    assert.ok(dep && dep.shownWhen && dep.shownWhen.genAiWorkload === true, "cost dependent discloses on genAI");
+    /* every attribute the sidebar renders carries a wizard section */
+    const missing = d.scenario.attributes.filter(a => !a.hidden && !a.derived && !a.section).map(a => a.id);
+    assert.equal(missing.length, 0, "attributes without a section: " + missing.join(", "));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

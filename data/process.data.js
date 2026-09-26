@@ -116,22 +116,22 @@ VSM.register("process", {
     /* ---------------- Vendor Onboarding (only when a new vendor is involved) ---------------- */
     { "id": "vendor-rfp", "name": "Vendor RFP & evaluation", "phase": "vendor", "owner": "procurement",
       "category": "enabling", "waste": "external", "duration": { "current": 30, "optimal": 15 }, "predecessors": ["sizing"],
-      "when": "newVendor",
+      "when": { "any": [{ "productEvaluationRequired": true }, { "rfpRequired": true }, { "rfiRequired": true }] },
       "description": "Issue RFP, score responses, shortlist, run demos." },
 
     { "id": "vendor-risk", "name": "Third-party risk assessment", "phase": "vendor", "owner": "security",
       "category": "approval", "waste": "approval-gate", "duration": { "current": 20, "optimal": 7 }, "predecessors": ["vendor-rfp"],
-      "when": "newVendor",
+      "when": "thirdPartyRisk",
       "description": "Security questionnaire, SOC 2 review, and risk rating for the vendor." },
 
     { "id": "vendor-contract", "name": "Contract negotiation & legal review", "phase": "vendor", "owner": "legal",
       "category": "enabling", "waste": "external", "duration": { "current": 25, "optimal": 10 }, "predecessors": ["vendor-risk"],
-      "when": "newVendor",
+      "when": { "any": [{ "contractChangeRequired": true }, "newVendor"] },
       "description": "MSA, DPA and order form redlines go back and forth with the vendor's counsel." },
 
     { "id": "vendor-onboard", "name": "Vendor onboarding (accounts, NDA, access)", "phase": "vendor", "owner": "procurement",
       "category": "enabling", "waste": "manual", "duration": { "current": 10, "optimal": 3 }, "predecessors": ["vendor-contract"],
-      "when": "newVendor",
+      "when": { "any": [{ "vendorNeedsOrgAccess": true }, { "professionalServices": true }, { "deliveryOwnership": { "in": ["vendor", "joint"] } }] },
       "description": "Supplier record, NDA, badge and system access are set up by hand across four systems." },
 
     /* ---------------- Architecture & Design ---------------- */
@@ -208,17 +208,17 @@ VSM.register("process", {
     /* ---------------- Environment Provisioning: CLOUD ---------------- */
     { "id": "cloud-subscription", "name": "Subscription / account request", "phase": "provision", "owner": "cloud",
       "category": "enabling", "waste": "manual", "duration": { "current": 5, "optimal": 1 }, "predecessors": ["arb", "arb-rework"],
-      "when": {"all": ["cloud", "newFootprint"]},
+      "when": {"all": ["azure", "newFootprint"]},
       "description": "Ticket-driven request for a new subscription; created by hand from a template." },
 
     { "id": "cloud-landing-zone", "name": "Landing zone & policy assignment", "phase": "provision", "owner": "cloud",
       "category": "enabling", "duration": { "current": 3, "optimal": 1 }, "predecessors": ["cloud-subscription"],
-      "when": {"all": ["cloud", "newFootprint"]},
+      "when": {"all": ["azure", "newFootprint"]},
       "description": "Place the subscription in the management group hierarchy; apply guardrail policies and tags." },
 
     { "id": "gpu-quota", "name": "GPU quota / capacity request", "phase": "provision", "owner": "cloud",
       "category": "enabling", "waste": "external", "duration": { "current": 10, "optimal": 3 }, "predecessors": ["cloud-subscription"],
-      "when": { "all": ["cloud", "aiWorkload"] },
+      "when": { "all": ["azure", "aiWorkload"] },
       "description": "Quota increase request to the cloud provider for GPU SKUs in the target region." },
 
     { "id": "cloud-network", "name": "Network connectivity (vNet, peering, DNS)", "phase": "provision", "owner": "network",
@@ -229,7 +229,7 @@ VSM.register("process", {
 
     { "id": "cloud-iam", "name": "Identity & access (RBAC, service principals)", "phase": "provision", "owner": "security",
       "category": "enabling", "waste": "manual", "duration": { "current": 6, "optimal": 1 }, "predecessors": ["cloud-landing-zone"],
-      "when": {"all": ["cloud", "newFootprint"]},
+      "when": {"all": ["azure", "newFootprint"]},
       "description": "Groups, role assignments and workload identities created through the IAM ticket process." },
 
     { "id": "cloud-iac", "name": "Infrastructure as code build (Terraform)", "phase": "provision", "owner": "cloud",
@@ -337,22 +337,22 @@ VSM.register("process", {
 
     { "id": "int-sso", "name": "SSO integration", "phase": "build", "owner": "security",
       "category": "enabling", "waste": "manual", "duration": { "current": 5, "optimal": 1 }, "predecessors": ["dev-build"],
-      "when": { "integrations": { "includes": "sso" } },
+      "when": { "identity": { "includes": "sso-federation" } },
       "description": "App registration, claims mapping and group assignment via the IAM ticket process." },
 
     { "id": "int-internet", "name": "Internet exposure & WAF review", "phase": "build", "owner": "security",
       "category": "approval", "waste": "approval-gate", "duration": { "current": 9, "optimal": 3 }, "predecessors": ["dev-build"],
-      "when": { "integrations": { "includes": "public-internet" } },
+      "when": { "network": { "includes": "inbound-internet" } },
       "description": "External exposure review, WAF policy and public DNS. Anything reachable from the internet gets this." },
 
     { "id": "int-private-network", "name": "Private endpoint & internal DNS configuration", "phase": "build", "owner": "network",
       "category": "enabling", "duration": { "current": 5, "optimal": 2 }, "predecessors": ["dev-build"],
-      "when": { "integrations": { "includes": "private-network" } },
+      "when": { "network": { "includes": "private-connectivity" } },
       "description": "Private endpoints, internal-only DNS records and route confirmation." },
 
     { "id": "int-web-proxy", "name": "Web proxy allowlisting", "phase": "build", "owner": "network",
       "category": "enabling", "waste": "queue", "duration": { "current": 7, "optimal": 1 }, "predecessors": ["dev-build"],
-      "when": { "integrations": { "includes": "web-proxy" } },
+      "when": { "proxyAllowlisting": true },
       "description": "Outbound destinations raised as proxy requests and worked through the network queue." },
 
     { "id": "int-mft", "name": "Managed file transfer onboarding", "phase": "build", "owner": "infra",
