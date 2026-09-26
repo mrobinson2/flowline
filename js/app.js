@@ -98,6 +98,8 @@
          They live outside state.scenario so a profile change never clears
          a decision somebody wrote a reason for. */
       overrides: {},
+      /* which wizard sections are open; 1 and 2 default open */
+      sections: {},
       profile: null,
       view: "current",
       filters: { wasteTypes: [], owners: [], search: "" },
@@ -135,6 +137,9 @@
         if (saved.overrides && typeof saved.overrides === "object" && !Array.isArray(saved.overrides)) {
           state.overrides = Object.assign({}, saved.overrides);
         }
+        if (saved.sections && typeof saved.sections === "object" && !Array.isArray(saved.sections)) {
+          state.sections = Object.assign({}, saved.sections);
+        }
         state.profile = saved.profile || null;
         state.view = saved.view || state.view;
         state.filters = Object.assign(state.filters, saved.filters || {});
@@ -164,13 +169,18 @@
 
   function saveState() { try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
 
-  /* Disabled controls (enabledWhen false) contribute a neutral value so rules never see stale input. */
+  /* Disabled controls (enabledWhen false) contribute a neutral value so rules
+     never see stale input. HIDDEN controls (shownWhen false, or diagnostic-
+     only) get the same treatment: their values stay in state - re-showing
+     restores them - but while hidden they must not fire rules the person can
+     no longer see the cause of (spec §4.5). */
   function effectiveScenario() {
     const s = Object.assign({}, state.scenario);
+    const neutralize = a => { s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]); };
     data.scenario.attributes.forEach(a => {
-      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) {
-        s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]);
-      }
+      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) { neutralize(a); return; }
+      if (a.diagnosticOnly) { neutralize(a); return; }
+      if (a.shownWhen !== undefined && !a.derived && !VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules())) neutralize(a);
     });
     return s;
   }
@@ -491,23 +501,35 @@
       });
     });
 
-    let lastGroup = null;
-    data.scenario.attributes.forEach(a => {
-      if (a.hidden) return;                 // set elsewhere (work type is the Scenario dropdown)
-      if (a.derived) return;                // the engine computes these; they render as chips
-      if (a.group && a.group !== lastGroup) {
-        box.appendChild(h("div", { class: "control-group" }, a.group));
-        lastGroup = a.group;
-      }
+    /* ---- one control row (spec §4.3: booleans are Yes/No segmented pairs,
+       never bare switches - ambiguous when a question is negatively phrased;
+       single-choice stays segmented up to six options, dropdown above) ---- */
+    function renderControl(a, body) {
       const enabled = VSM.rules.isEnabled(a, state.scenario, namedRules());
       const forced = impliedBy[a.id] && resolved[a.id] && !state.scenario[a.id];
       const row = h("div", { class: "control" + (enabled ? "" : " disabled") + (forced ? " forced" : "") });
       if (a.type === "boolean") {
-        const input = h("input", { type: "checkbox" });
-        input.checked = !!state.scenario[a.id] || !!forced;
-        input.disabled = !enabled || !!forced;
-        input.onchange = () => { state.scenario[a.id] = input.checked; touched(a.id); buildScenarioControls(); rebuild(); };
-        row.appendChild(h("label", { class: "switch" }, input, h("span", { class: "track" }), h("span", { class: "lbl" }, a.label)));
+        row.appendChild(h("div", { class: "lbl" }, a.label));
+        const seg = h("div", { class: "segmented seg-bool" });
+        const cur = !!state.scenario[a.id] || !!forced;
+        [["Yes", true], ["No", false]].forEach(([lab, val]) => {
+          const b = h("button", { type: "button", class: cur === val ? "on" : "" }, lab);
+          b.disabled = !enabled || !!forced;
+          b.onclick = () => { state.scenario[a.id] = val; touched(a.id); buildScenarioControls(); rebuild(); };
+          seg.appendChild(b);
+        });
+        row.appendChild(seg);
+      } else if (a.type === "enum" && (a.options || []).length > 6) {
+        if (a.label !== a.group) row.appendChild(h("div", { class: "lbl" }, a.label));
+        const sel = h("select", { class: "select" });
+        (a.options || []).forEach(o => {
+          const opt = h("option", { value: o.value }, o.label);
+          if (state.scenario[a.id] === o.value) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.disabled = !enabled;
+        sel.onchange = () => { state.scenario[a.id] = sel.value; touched(a.id); buildScenarioControls(); rebuild(); };
+        row.appendChild(sel);
       } else if (a.type === "enum") {
         if (a.label !== a.group) row.appendChild(h("div", { class: "lbl" }, a.label));
         const seg = h("div", { class: "segmented" });
@@ -534,7 +556,72 @@
       if (forced) row.appendChild(h("div", { class: "hint" }, "Required by " + impliedBy[a.id].join(", ")));
       else if (a.help) row.appendChild(h("div", { class: "hint" }, a.help));
       if (a.enabledWhen && !enabled) row.appendChild(h("div", { class: "hint" }, "Applies when " + VSM.rules.describe(a.enabledWhen, data.scenario.attributes, namedRules())));
-      box.appendChild(row);
+      body.appendChild(row);
+    }
+
+    /* ---- the six wizard sections (spec §4.2), plus a trailing section for
+       imported data that predates section numbers. A control whose shownWhen
+       is false is not rendered at all; its value stays in state and comes
+       back when the rule turns true (spec §4.5). ---- */
+    const SECTION_TITLES = {
+      1: "What are you doing?", 2: "Where and how will it run?", 3: "Is it standard?",
+      4: "What data and business risk?", 5: "What external dependencies?", 6: "Who builds and operates it?"
+    };
+    const visible = a => !a.hidden && !a.derived && !a.diagnosticOnly
+      && (a.shownWhen === undefined || VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules()));
+    const bySection = new Map();
+    data.scenario.attributes.forEach(a => {
+      if (!visible(a)) return;
+      const key = a.section >= 1 && a.section <= 6 ? a.section : 0;
+      if (!bySection.has(key)) bySection.set(key, []);
+      bySection.get(key).push(a);
+    });
+    const defaults = VSM.rules.defaults(data.scenario.attributes);
+    const same = (x, y) => Array.isArray(x) && Array.isArray(y)
+      ? x.length === y.length && x.every(v => y.includes(v)) : x === y;
+    const requiredUnanswered = a => {
+      if (!a.required) return false;
+      const v = state.scenario[a.id];
+      if (a.type === "multi") return !Array.isArray(v) || v.length === 0;
+      if (a.type === "enum") return v === "tbd" || v === undefined || v === null || v === "";
+      return v === undefined;
+    };
+    /* dot policy, in one place: ◐ a required answer is missing (the tier says
+       "Not yet determined", the data list is empty); ● something in the
+       section was answered away from its default; ○ untouched. */
+    const sectionState = attrs => {
+      if (attrs.some(requiredUnanswered)) return "partial";
+      if (attrs.some(a => !same(state.scenario[a.id], defaults[a.id]))) return "done";
+      return "untouched";
+    };
+    const DOT = { done: "●", partial: "◐", untouched: "○" };
+    [1, 2, 3, 4, 5, 6, 0].forEach(n => {
+      const attrs = bySection.get(n);
+      if (!attrs || !attrs.length) return;
+      const stateName = sectionState(attrs);
+      const open = state.sections[n] === undefined ? n <= 2 : !!state.sections[n];
+      const sec = h("div", { class: "wizard-section" + (open ? " open" : "") });
+      const head = h("button", {
+        type: "button", class: "section-head", "aria-expanded": open ? "true" : "false",
+        onclick: () => { state.sections[n] = !open; saveState(); buildScenarioControls(); }
+      },
+        h("i", { class: "dot " + stateName }, DOT[stateName]),
+        h("span", null, n === 0 ? "Options" : n + ". " + SECTION_TITLES[n]),
+        h("em", { class: "chev" }, open ? "−" : "+"));
+      sec.appendChild(head);
+      if (open) {
+        const body = h("div", { class: "section-body" });
+        let lastGroup = null;
+        attrs.forEach(a => {
+          if (a.group && a.group !== lastGroup) {
+            body.appendChild(h("div", { class: "control-group" }, a.group));
+            lastGroup = a.group;
+          }
+          renderControl(a, body);
+        });
+        sec.appendChild(body);
+      }
+      box.appendChild(sec);
     });
   }
 

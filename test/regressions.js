@@ -108,7 +108,7 @@ function appHarness(initial) {
     rebuild = () => { model = VSM.schedule.build(data.process, data.taxonomy, {}, {}); };
     init = () => { const ok = loadData(); rebuild(); return ok; };   // mirrors the real init(), which reports whether the data validated
     VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, importSheets, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
-      loadState, buildScenarioControls, buildEditForm, getState: () => state,
+      loadState, buildScenarioControls, buildEditForm, getState: () => state, effectiveScenario,
       renderWasteChips: () => { rebuild(); renderWasteChips(); } };
   // small public surface`);
   vm.runInContext(src, context);
@@ -1154,6 +1154,25 @@ function form(extra = {}) {
     /* every attribute the sidebar renders carries a wizard section */
     const missing = d.scenario.attributes.filter(a => !a.hidden && !a.derived && !a.section).map(a => a.id);
     assert.equal(missing.length, 0, "attributes without a section: " + missing.join(", "));
+  });
+
+  await test("1.3.0: shownWhen hides a control's value from evaluation and restores it", () => {
+    const attrs = [
+      { id: "genAI", label: "GenAI", type: "boolean", default: false, section: 2 },
+      { id: "costOver1k", label: "Cost over 1k", type: "boolean", default: false, section: 2,
+        shownWhen: { genAI: true } }
+    ];
+    const h = appHarness({ process: { units: "hours", activities: [task("A"), task("gate", { predecessors: ["A"], when: { costOver1k: true } })] },
+      taxonomy: clone(shipped.taxonomy), scenario: { attributes: attrs, rules: {} } });
+    h.api.loadState();
+    const st = h.api.getState();
+    st.scenario.costOver1k = true;          // answered while visible...
+    st.scenario.genAI = false;              // ...then its parent turned off
+    const hidden = h.api.effectiveScenario();
+    assert.equal(hidden.costOver1k, false, "a hidden value must not evaluate");
+    st.scenario.genAI = true;
+    const shown = h.api.effectiveScenario();
+    assert.equal(shown.costOver1k, true, "re-showing restores the retained value");
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

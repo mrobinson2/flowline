@@ -257,3 +257,21 @@ body.metrics-hidden #metrics { display: none; }
 .dc-why { margin-top: 4px; opacity: 0.65; line-height: 1.45; }
 .dc-actions { margin-top: 6px; display: flex; gap: 6px; }
 .dc-btn { font-size: 11px; padding: 2px 8px; }
+
+/* ---- the six wizard sections ---- */
+.wizard-section { border: 1px solid var(--border, rgba(148,163,184,0.2)); border-radius: 8px; margin: 6px 0; overflow: hidden; }
+.section-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: rgba(148,163,184,0.08); border: 0; padding: 8px 10px;
+  font: inherit; font-size: 12px; font-weight: 600; color: inherit;
+  cursor: pointer; text-align: left;
+}
+.section-head:hover { background: rgba(148,163,184,0.15); }
+.section-head .dot { font-style: normal; font-size: 11px; }
+.section-head .dot.done { color: #22C55E; }
+.section-head .dot.partial { color: #F59E0B; }
+.section-head .dot.untouched { opacity: 0.45; }
+.section-head span { flex: 1; }
+.section-head .chev { font-style: normal; opacity: 0.6; }
+.section-body { padding: 4px 10px 10px; }
+.seg-bool button { min-width: 44px; }
