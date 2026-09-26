@@ -108,7 +108,7 @@ function appHarness(initial) {
     rebuild = () => { model = VSM.schedule.build(data.process, data.taxonomy, {}, {}); };
     init = () => { const ok = loadData(); rebuild(); return ok; };   // mirrors the real init(), which reports whether the data validated
     VSM.testApp = { setData(d) { data = d; }, getData() { return data; }, applyEdit, loadTableFile, loadJSONFile, loadData, safeColor, importSheets, esc: s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
-      loadState, buildScenarioControls, buildEditForm,
+      loadState, buildScenarioControls, buildEditForm, getState: () => state,
       renderWasteChips: () => { rebuild(); renderWasteChips(); } };
   // small public surface`);
   vm.runInContext(src, context);
@@ -1071,6 +1071,33 @@ function form(extra = {}) {
     /* a stale saved state carrying retired ids stays inert */
     const stale = build2({ pilotPoc: true, privacyReview: false });
     assert.deepEqual(stale.nodes.map(n => n.id).sort(), OLD_DEFAULT_IDS, "retired ids must be inert");
+  });
+
+  await test("1.3.0: saved browser state survives a vocabulary change", () => {
+    /* Startup used to merge saved answers blindly; only the linked-folder
+       path filtered them. A retired enum value then evaluated as a ghost:
+       every rule reading it went false and rows vanished with no error. */
+    const attrs = [
+      { id: "hosting", label: "Hosting", type: "enum", default: "azure",
+        options: [{ value: "azure" }, { value: "on-prem" }] },
+      { id: "integrations", label: "Integrations", type: "multi", default: [],
+        options: [{ value: "api-gateway" }, { value: "mft" }] },
+      { id: "aiWorkload", label: "AI", type: "boolean", default: false }
+    ];
+    const h = appHarness({ process: { units: "hours", activities: [task("A")] },
+      taxonomy: clone(shipped.taxonomy), scenario: { attributes: attrs, rules: {} } });
+    h.storage.set("vsm.state.v1", JSON.stringify({ scenario: {
+      hosting: "cloud",                                   // retired option value
+      integrations: ["public-internet", "mft"],           // one retired, one alive
+      aiWorkload: true,                                   // still valid
+      pilotPoc: true                                      // retired attribute id
+    } }));
+    h.api.loadState();
+    const s = h.api.getState().scenario;
+    assert.equal(s.hosting, "azure", "a retired enum value must fall back to the default");
+    assert.deepEqual(s.integrations, ["mft"], "retired multi values must be filtered out");
+    assert.equal(s.aiWorkload, true, "valid saved answers must survive");
+    assert.equal(s.pilotPoc, undefined, "a retired attribute id must not ride along");
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

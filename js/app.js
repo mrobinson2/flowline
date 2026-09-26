@@ -107,13 +107,31 @@
       metricsPanel: true
     };
   }
+  /* Merge a saved answer set over the CURRENT vocabulary: keep every choice
+     that still applies, default the rest, drop the orphans. Startup and the
+     linked-folder path both go through here, because a saved state can
+     predate a vocabulary change just as easily as a loaded file can declare
+     one - and a retired enum value merged blindly evaluates as a ghost:
+     every rule reading it goes false and rows vanish with no error. */
+  function mergeScenario(attrDefs, saved) {
+    const fresh = VSM.rules.defaults(attrDefs);
+    (attrDefs || []).forEach(a => {
+      const v = saved ? saved[a.id] : undefined;
+      if (v === undefined) return;
+      if (a.type === "boolean") { if (typeof v === "boolean") fresh[a.id] = v; }
+      else if (a.type === "multi") { if (Array.isArray(v)) fresh[a.id] = v.filter(x => (a.options || []).some(o => o.value === x)); }
+      else if ((a.options || []).some(o => o.value === v)) fresh[a.id] = v;
+    });
+    return fresh;
+  }
+
   function loadState() {
     state = defaultState();
     try {
       const saved = JSON.parse(localStorage.getItem(STATE_KEY) || "null");
       if (!saved && window.innerWidth < 900) state.sidebar = false;
       if (saved) {
-        state.scenario = Object.assign(state.scenario, saved.scenario || {});
+        state.scenario = mergeScenario(data.scenario.attributes, saved.scenario || {});
         if (saved.overrides && typeof saved.overrides === "object" && !Array.isArray(saved.overrides)) {
           state.overrides = Object.assign({}, saved.overrides);
         }
@@ -1117,19 +1135,9 @@
     // a linked folder is the source of truth, so drop any browser-held override
     localStorage.removeItem(DATA_KEY);
     data = candidate;
-    /* The incoming data may declare a different toggle vocabulary. Keep every
-       choice that still applies, default the rest, and drop the orphans -
-       otherwise the summary line reads "undefined" and the rules evaluate
-       against values that no longer exist. */
-    const fresh = VSM.rules.defaults(data.scenario.attributes);
-    (data.scenario.attributes || []).forEach(a => {
-      const v = state.scenario ? state.scenario[a.id] : undefined;
-      if (v === undefined) return;
-      if (a.type === "boolean") { if (typeof v === "boolean") fresh[a.id] = v; }
-      else if (a.type === "multi") { if (Array.isArray(v)) fresh[a.id] = v.filter(x => (a.options || []).some(o => o.value === x)); }
-      else if ((a.options || []).some(o => o.value === v)) fresh[a.id] = v;
-    });
-    state.scenario = fresh;
+    /* The incoming data may declare a different toggle vocabulary. Same
+       filter as startup: keep what still applies, default the rest. */
+    state.scenario = mergeScenario(data.scenario.attributes, state.scenario);
     if (state.profile && !(data.scenario.presets || []).some(p => p.id === state.profile)) state.profile = null;
     describeSource(null);
     buildScenarioControls();
