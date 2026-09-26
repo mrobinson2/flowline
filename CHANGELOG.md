@@ -30,6 +30,8 @@ Prepared 25 September 2026 from 1.0.3. 1.0 answers "how long does this process t
 
 9. **The source-tree scan walked into `.worktrees/`** and failed on checkouts carrying a git worktree; it now skips that directory like `.git` and `node_modules`.
 
+# Flowline 1.0.3
+
 Prepared 20 September 2026 from 1.0.2. Fixes seventeen findings from a review of 1.0.2, including two that 1.0.2 introduced while fixing something else. Nothing has been published remotely.
 
 Two of these are hangs that any imported file can trigger, and they are the reason for the release. The rest are crashes, silent data loss in the importer, and the parts of three 1.0.2 fixes that only covered one of the paths they needed to.
