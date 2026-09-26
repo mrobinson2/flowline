@@ -482,6 +482,36 @@
     if (toggles && !matrix) report.warnings.push("A Toggles tab was found but no usable Scenario Matrix, so no task is tied to any toggle yet.");
     if (!toggles && (found.profiles || found.matrix)) report.warnings.push("Profiles or Scenario Matrix found without a Toggles tab. Toggles defines the vocabulary, so both were ignored.");
 
+    /* ---- named rules from the Rules sheet: write hard logic once, reference
+       it by R_ name from any Include Expression. Two passes so a rule may
+       reference one defined below it; a reference loop is validate.js's job.
+       A broken expression here is an ERROR - a shared rule poisons every
+       task that references it. */
+    const sheetRules = Object.create(null);
+    const ruleMeta = Object.create(null);
+    if (found.rules) {
+      const ruleRows = readSheet(found.rules, S.RULES, report, "Rules");
+      const ruleIds = [];
+      ruleRows.forEach(r => {
+        const rid = txt(r.id);
+        if (!rid) { report.warnings.push("Rules row " + r.__row + " has no Rule ID and was skipped."); return; }
+        if (!/^R_/.test(rid)) { report.errors.push("Rules sheet: rule ids start with R_ ('" + rid + "')."); return; }
+        if (ruleMeta[rid]) { report.warnings.push("Rules sheet: duplicate rule '" + rid + "' was skipped."); return; }
+        ruleMeta[rid] = { expression: txt(r.expression), means: txt(r.means) || undefined, why: txt(r.why) || undefined };
+        ruleIds.push(rid);
+      });
+      ruleIds.forEach(rid => {
+        try {
+          const c = VSM.expr.compile(ruleMeta[rid].expression, toggles || undefined, ruleIds);
+          sheetRules[rid] = c.rule;
+          (c.warnings || []).forEach(w => report.warnings.push("Rules sheet, '" + rid + "': " + w));
+        } catch (e) {
+          report.errors.push("Rules sheet, '" + rid + "': " + e.message + (e.column ? " (column " + e.column + ")" : ""));
+        }
+      });
+    }
+    const sheetRuleIds = Object.keys(sheetRules);
+
     /* ---- scenario switches from the distinct "Applies When" phrases */
     const conditions = new Map();
     taskRows.forEach(r => {
@@ -739,7 +769,7 @@
           if (t.implies && t.implies.length) a.implies = t.implies;
           return a;
         }).concat(extra),
-        rules: matrix ? {} : namedRules,
+        rules: Object.assign(Object.create(null), matrix ? {} : namedRules, sheetRules),
         /* A profile sets only what it declares. Everything it stays silent
            about keeps whatever the person chose, which is what lets "and it
            involves AI" ride along on top of any profile. */
@@ -769,13 +799,20 @@
     } else {
       scenario = {
         attributes: attributes.length ? attributes : [{ id: "all", label: "All steps", type: "boolean", default: true }],
-        rules: namedRules,
+        rules: Object.assign(Object.create(null), namedRules, sheetRules),
         presets: [
           { id: "everything", label: "Every step (full map)", set: attributes.reduce((o, a) => (o[a.id] = true, o), Object.create(null)) },
           { id: "baseline", label: "Baseline workload only", set: attributes.reduce((o, a) => (o[a.id] = false, o), Object.create(null)) }
         ]
       };
       report.notes.push("No Toggles tab, so the scenario switches were built from the distinct Applies When phrases. Add Toggles, Profiles and Scenario Matrix tabs to tailor properly.");
+    }
+    if (sheetRuleIds.length) {
+      scenario.ruleMeta = ruleMeta;
+      scenario.rulesSheet = {
+        headers: found.rules.matrix[0].map(txt),
+        rows: found.rules.matrix.slice(1).filter(row => txt(row[0]) !== "")
+      };
     }
 
     if (matrix) {

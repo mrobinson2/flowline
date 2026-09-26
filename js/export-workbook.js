@@ -342,6 +342,18 @@
           })
         });
       }
+      if (cfg.rulesSheet && Array.isArray(cfg.rulesSheet.headers) && cfg.rulesSheet.headers.length) {
+        out.push({
+          name: "Rules",
+          headers: cfg.rulesSheet.headers,
+          widths: cfg.rulesSheet.headers.map((h, i) => (i === 0 ? 18 : i === 1 ? 60 : 44)),
+          rows: cfg.rulesSheet.rows.map(row => {
+            const o = Object.create(null);
+            cfg.rulesSheet.headers.forEach((hd, i) => { o[hd] = row[i] === undefined || row[i] === null ? "" : row[i]; });
+            return o;
+          })
+        });
+      }
       if (cfg.matrixSheet && Array.isArray(cfg.matrixSheet.headers) && cfg.matrixSheet.headers.length) {
         out.push({
           name: "Scenario Matrix",

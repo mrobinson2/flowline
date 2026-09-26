@@ -822,5 +822,50 @@ function form(extra = {}) {
     });
   });
 
+  await test("1.3.0: Rules sheet compiles, resolves forward refs, and round-trips", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Applies When"],
+        ["1", "P1", "Base step", "", "8", "4", "Every workload"],
+        ["2", "P1", "Gated step", "1", "8", "4", "Sometimes"]
+      ],
+      "Toggles": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default"],
+        ["rfi", "Sourcing", "RFI", "boolean", "", "No"],
+        ["rfp", "Sourcing", "RFP", "boolean", "", "No"]
+      ],
+      "Rules": [
+        ["Rule ID", "Expression", "Means", "Why It Exists"],
+        ["R_Selection", "R_AnySourcing", "any sourcing route", "written once"],
+        ["R_AnySourcing", "rfi = true OR rfp = true", "rfi or rfp", ""]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    assert.deepEqual(r.scenario.rules.R_AnySourcing, { any: [{ rfi: true }, { rfp: true }] });
+    assert.equal(r.scenario.rules.R_Selection, "R_AnySourcing");   // forward ref kept by name
+    assert.equal(r.scenario.ruleMeta.R_Selection.means, "any sourcing route");
+    assert.ok(r.scenario.rulesSheet && r.scenario.rulesSheet.rows.length === 2);
+    assert.equal(V.validate.run(r.process, r.taxonomy, r.scenario).errors.length, 0);
+    const model = V.schedule.build(r.process, r.taxonomy,
+      V.rules.defaults(r.scenario.attributes), r.scenario.rules, r.scenario.attributes);
+    const out = V.exportWorkbook.sheets(model, { scenarioCfg: r.scenario, scenarioSummary: "" });
+    const rulesOut = out.find(s => s.name === "Rules");
+    assert.ok(rulesOut, "export writes no Rules sheet");
+    assert.equal(rulesOut.rows.length, 2);
+    /* a bad expression is an ERROR naming the rule */
+    const bad = JSON.parse(JSON.stringify(sheets));
+    bad.Rules.push(["R_Broken", "rfi AND", "", ""]);
+    const r2 = V.import.fromSheets(bad, {});
+    assert.ok(r2.report.errors.some(e => e.includes("R_Broken")), JSON.stringify(r2.report.errors));
+    /* a self-reference imports (the id exists) but validation reports the loop */
+    const loopy = JSON.parse(JSON.stringify(sheets));
+    loopy.Rules.push(["R_Loop", "R_Loop", "", ""]);
+    const r3 = V.import.fromSheets(loopy, {});
+    assert.equal(r3.report.errors.length, 0, JSON.stringify(r3.report.errors));
+    const issues3 = V.validate.run(r3.process, r3.taxonomy, r3.scenario);
+    assert.ok(issues3.errors.some(e => /loop/.test(e)), JSON.stringify(issues3.errors));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
