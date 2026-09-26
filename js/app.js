@@ -94,6 +94,10 @@
   function defaultState() {
     return {
       scenario: VSM.rules.defaults(data.scenario.attributes),
+      /* sticky overrides of DERIVED attributes: { id: { value, reason } }.
+         They live outside state.scenario so a profile change never clears
+         a decision somebody wrote a reason for. */
+      overrides: {},
       profile: null,
       view: "current",
       filters: { wasteTypes: [], owners: [], search: "" },
@@ -110,6 +114,9 @@
       if (!saved && window.innerWidth < 900) state.sidebar = false;
       if (saved) {
         state.scenario = Object.assign(state.scenario, saved.scenario || {});
+        if (saved.overrides && typeof saved.overrides === "object" && !Array.isArray(saved.overrides)) {
+          state.overrides = Object.assign({}, saved.overrides);
+        }
         state.profile = saved.profile || null;
         state.view = saved.view || state.view;
         state.filters = Object.assign(state.filters, saved.filters || {});
@@ -152,6 +159,7 @@
   function scenarioSummary() {
     const s = effectiveScenario(), parts = [];
     data.scenario.attributes.forEach(a => {
+      if (a.derived) return;                 // the engine's answers live on the chips
       if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) return;
       const v = s[a.id];
       if (a.type === "boolean") { if (v) parts.push(a.label); }
@@ -207,7 +215,7 @@
        leave a blank page with no way back, so report it like any other data
        error and keep the last good chart on screen. */
     try {
-      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes);
+      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes, state.overrides);
     } catch (e) {
       lastIssues = { errors: issues.errors.concat("the schedule could not be built: " + e.message), warnings: issues.warnings };
       renderIssues(lastIssues);
@@ -222,6 +230,7 @@
     renderWarnings();
     renderMetrics();
     renderWasteChips();
+    renderDerived();
     renderChart();
     if (document.body.classList.contains("presenting")) renderPresentation();
     if (selectedId) showDetails(selectedId);
@@ -315,6 +324,88 @@
     });
   }
 
+  /* ------------------------------------------------------------ derived chips
+     The engine's answers (spec §4.4): each derived attribute renders as a
+     muted chip with its value and the SPECIFIC answers that produced it -
+     never generic text - plus an override affordance. An override is sticky,
+     badged, and carries its reason. */
+  function renderDerived() {
+    const box = $("#derived-chips");
+    if (!box) return;
+    box.innerHTML = "";
+    const dv = model && model.derived;
+    if (!dv || !dv.derived.length) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(h("div", { class: "control-group" }, "Derived by the engine"));
+    dv.derived.forEach(id => {
+      const attr = data.scenario.attributes.find(a => a.id === id);
+      if (!attr) return;
+      const p = dv.provenance[id] || { value: undefined, because: [] };
+      const ov = dv.overridden && Object.prototype.hasOwnProperty.call(dv.overridden, id) && !dv.overridden[id].ignored ? dv.overridden[id] : null;
+      const valueLabel = v => {
+        const o = attr.options ? attr.options.find(x => x.value === v) : null;
+        return o ? o.label : v === true ? "Yes" : v === false ? "No" : String(v);
+      };
+      const chip = h("div", { class: "derived-chip" + (ov ? " overridden" : "") });
+      chip.appendChild(h("div", { class: "dc-head" },
+        h("span", { class: "dc-label" }, attr.label),
+        h("b", { class: "dc-value" }, valueLabel(p.value)),
+        ov ? h("em", { class: "dc-badge", title: ov.reason || "" }, "overridden") : null));
+      if (ov) {
+        chip.appendChild(h("div", { class: "dc-why" }, "Overridden" + (ov.reason ? ": " + ov.reason : " (no reason recorded)")));
+      } else {
+        const because = (p.because || []).slice(0, 4);
+        if (because.length) chip.appendChild(h("div", { class: "dc-why" },
+          "Because: " + because.map(b => (b.satisfied === false ? "not: " : "") + b.label + " = " + b.valueLabel).join("  ·  ")));
+      }
+      const actions = h("div", { class: "dc-actions" });
+      actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => overrideDialog(attr, p.value, ov) }, ov ? "Change" : "Override"));
+      if (ov) actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+        delete state.overrides[id]; rebuild(); toast(attr.label + " derives again");
+      } }, "Clear override"));
+      chip.appendChild(actions);
+      box.appendChild(chip);
+    });
+  }
+
+  function overrideDialog(attr, current, existing) {
+    if (!document.body) return;
+    const needReason = !!attr.overrideRequiresReason;
+    const overlay = h("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
+    const done = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = e => { if (e.key === "Escape") done(); };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(); });
+    let chosen = existing ? existing.value : current;
+    const choices = attr.type === "boolean" ? [[true, "Yes"], [false, "No"]] : (attr.options || []).map(o => [o.value, o.label]);
+    const seg = h("div", { class: "segmented" });
+    const paint = () => { [...seg.children].forEach((b, i) => b.classList.toggle("on", choices[i][0] === chosen)); };
+    choices.forEach(([v, lab]) => seg.appendChild(h("button", { type: "button", onclick: () => { chosen = v; paint(); } }, lab)));
+    const reason = h("textarea", { class: "input", rows: 2,
+      placeholder: needReason ? "Why does the derivation not apply here? (required)" : "Reason (recommended)" });
+    if (existing && existing.reason) reason.value = existing.reason;
+    const hint = h("div", { class: "hint", hidden: true }, "A reason is required for this override.");
+    overlay.appendChild(h("div", { class: "overlay-box" },
+      h("div", { class: "overlay-head" },
+        h("h2", null, "Override: " + attr.label),
+        h("button", { class: "icon", type: "button", title: "Cancel", onclick: done }, "×")),
+      h("div", { class: "overlay-body" },
+        h("p", null, "The engine derived “" + (choices.find(c => c[0] === current) || [null, String(current)])[1] +
+          "”. An override is sticky - it wins over the derivation on every recompute until it is cleared - and it is recorded with the scenario."),
+        seg,
+        h("label", { class: "field" }, h("span", null, "Reason" + (needReason ? " (required)" : "")), reason), hint),
+      h("div", { class: "overlay-foot" },
+        h("button", { class: "ghost", type: "button", onclick: done }, "Cancel"),
+        h("button", { class: "primary", type: "button", onclick: () => {
+          const why = reason.value.trim();
+          if (needReason && !why) { hint.hidden = false; reason.focus(); return; }
+          state.overrides[attr.id] = why ? { value: chosen, reason: why } : { value: chosen };
+          done(); rebuild(); toast(attr.label + " overridden");
+        } }, "Apply override"))));
+    document.body.appendChild(overlay);
+    paint();
+  }
+
   /* Scheduler notes are merged with whatever validation reported for this data. */
   function renderWarnings() {
     renderIssues({ errors: lastIssues.errors, warnings: lastIssues.warnings.concat(model.warnings) });
@@ -385,6 +476,7 @@
     let lastGroup = null;
     data.scenario.attributes.forEach(a => {
       if (a.hidden) return;                 // set elsewhere (work type is the Scenario dropdown)
+      if (a.derived) return;                // the engine computes these; they render as chips
       if (a.group && a.group !== lastGroup) {
         box.appendChild(h("div", { class: "control-group" }, a.group));
         lastGroup = a.group;

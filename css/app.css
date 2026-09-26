@@ -241,3 +241,19 @@ body.metrics-hidden #metrics { display: none; }
 .status-seg { margin-bottom: 8px; }
 .status-seg button.on { background: #2563EB; border-color: #2563EB; color: #fff; }
 .status-box .input { margin-bottom: 4px; }
+
+/* ---- derived chips: the engine's answers, explained ---- */
+#derived-chips { margin-top: 10px; }
+.derived-chip {
+  border: 1px solid var(--border, rgba(148,163,184,0.25));
+  border-radius: 8px; padding: 8px 10px; margin: 6px 0;
+  background: rgba(148,163,184,0.06); font-size: 12px;
+}
+.derived-chip.overridden { border-style: dashed; border-color: #F59E0B; }
+.dc-head { display: flex; align-items: baseline; gap: 8px; }
+.dc-label { opacity: 0.75; flex: 1; }
+.dc-value { font-size: 12.5px; }
+.dc-badge { color: #F59E0B; font-style: normal; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+.dc-why { margin-top: 4px; opacity: 0.65; line-height: 1.45; }
+.dc-actions { margin-top: 6px; display: flex; gap: 6px; }
+.dc-btn { font-size: 11px; padding: 2px 8px; }
