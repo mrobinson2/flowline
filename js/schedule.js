@@ -82,12 +82,23 @@ VSM.schedule = (function () {
        The result depends only on the final state, never on the order things
        were switched on. */
     if (attrDefs && VSM.rules.applyImplications) scenario = VSM.rules.applyImplications(attrDefs, scenario);
+    /* The 6th argument carries user overrides. Two shapes: the legacy flat
+       map of DERIVED-attribute overrides, or { derived, tasks } where tasks
+       forces individual activities in or out (the specification's
+       evaluation-contract step 5). Detected by the composite keys, so every
+       Phase 2 caller keeps working unchanged. */
+    const isPlain = o => !!o && typeof o === "object" && !Array.isArray(o);
+    let derivedOv = overrides || null, taskOv = null;
+    if (isPlain(overrides) && (isPlain(overrides.derived) || isPlain(overrides.tasks))) {
+      derivedOv = isPlain(overrides.derived) ? overrides.derived : null;
+      taskOv = isPlain(overrides.tasks) ? overrides.tasks : null;
+    }
     /* Then the derived attributes (lane, tier-driven controls, privacy
        trigger), in declaration order, with provenance and any sticky user
        overrides. The model carries the result so the UI can explain it. */
     let derived = null;
     if (attrDefs && VSM.derive) {
-      derived = VSM.derive.compute(attrDefs, scenario, named, overrides);
+      derived = VSM.derive.compute(attrDefs, scenario, named, derivedOv);
       scenario = derived.scenario;
     }
     const acts = process.activities || [];
@@ -99,6 +110,26 @@ VSM.schedule = (function () {
     /* 1. inclusion */
     const includedIds = new Set(acts.filter(a => VSM.rules.evaluate(a.when, scenario, named)).map(a => a.id));
 
+    /* 1c... precedes 1b in source so exclusions reflect the overrides:
+       per-task overrides, applied only where the activity allows them.
+       Forcing IN adds work the rules ruled out; forcing OUT is refused for
+       a governed gate - a control that a toggle disagreement or a keen user
+       can silently drop is a control that will eventually embarrass somebody. */
+    const appliedTaskOv = Object.create(null);
+    if (taskOv) Object.keys(taskOv).forEach(id => {
+      const act = byId.get(id);
+      if (!act) { warnings.push(id + ": task override names an unknown activity id"); return; }
+      /* CanOverride is Yes|Governed in the specification - there is no "No".
+         An absent column therefore means overridable; Governed alone
+         restricts, and only in the removing direction. */
+      const want = taskOv[id];
+      if (want === false && act.canOverride === "governed") { warnings.push(id + ": is a governed gate; it cannot be switched off"); return; }
+      if (want === true) includedIds.add(id);
+      else if (want === false) includedIds.delete(id);
+      else return;
+      appliedTaskOv[id] = want;
+    });
+
     /* 1b. the excluded partition, kept beside the model. Reviewers challenge
        absences more than presences; the drawer's Excluded tab renders from
        this, each row explaining itself via the rule it failed. */
@@ -106,7 +137,8 @@ VSM.schedule = (function () {
     const excluded = acts.filter(a => !includedIds.has(a.id)).map(a => ({
       id: a.id, name: a.name || a.id, phase: a.phase,
       stage: a.phase !== undefined ? phaseStage.get(a.phase) : undefined,
-      when: a.when
+      when: a.when,
+      overridden: appliedTaskOv[a.id] === false || undefined
     }));
 
     /* 2. predecessor sets (explicit successors are folded in) */
@@ -316,7 +348,7 @@ VSM.schedule = (function () {
     const orgPairs = new Set(links.filter(l => l.crossOrg).map(l => [l.fromTeam.org, l.toTeam.org].sort().join(" | ")));
     m.orgBoundaries = orgPairs.size;
 
-    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy, derived, excluded };
+    return { nodes, nodeById, links, metrics: m, warnings, scenario, process, taxonomy, derived, excluded, taskOverrides: appliedTaskOv };
   }
 
   return { build, resolveDuration, resolveTime, setDuration };

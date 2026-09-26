@@ -1199,5 +1199,36 @@ function form(extra = {}) {
     assert.ok(tier && tier.satisfied === false && tier.valueLabel === "Tier 4", JSON.stringify(leaves));
   });
 
+  await test("1.4.0: per-task overrides apply where allowed; Governed gates refuse exclusion", () => {
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = (sc, ov) => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes, ov);
+    /* the sample now uses the Phase 1 field: DR trio overridable, the
+       security attestation and CAB governed */
+    const byId = Object.fromEntries(d.process.activities.map(a => [a.id, a]));
+    assert.equal(byId["dr-design"].canOverride, "yes");
+    assert.equal(byId["cab"].canOverride, "governed");
+    /* exclude an overridable task */
+    const noDr = build2({}, { tasks: { "dr-design": false } });
+    assert.ok(!noDr.nodes.some(n => n.id === "dr-design"));
+    assert.ok(noDr.taskOverrides && noDr.taskOverrides["dr-design"] === false);
+    /* RF#2: a governed gate cannot be switched off */
+    const keepCab = build2({}, { tasks: { "cab": false } });
+    assert.ok(keepCab.nodes.some(n => n.id === "cab"), "cab must survive");
+    assert.ok(keepCab.warnings.some(w => /cab/.test(w) && /governed/i.test(w)), JSON.stringify(keepCab.warnings));
+    /* RF#4: forcing a task IN when its rule said no - preds resolve, no orphan */
+    const forced = build2({}, { tasks: { "vendor-risk": true } });
+    const vr = forced.nodes.find(n => n.id === "vendor-risk");
+    assert.ok(vr, "vendor-risk forced in");
+    assert.ok(vr.preds.length > 0 && vr.preds.every(pr => forced.nodeById.has(pr)), "preds must resolve");
+    /* an unknown id warns rather than silently vanishing */
+    const ghost = build2({}, { tasks: { "no-such-task": false } });
+    assert.ok(ghost.warnings.some(w => /no-such-task/.test(w)), JSON.stringify(ghost.warnings));
+    /* RF#3: the legacy flat 6th-arg shape still means derived overrides */
+    const legacy = build2({}, { architectureLane: { value: "custom", reason: "board" } });
+    assert.equal(legacy.derived.provenance.architectureLane.value, "custom");
+    assert.ok(legacy.nodes.some(n => n.id === "arb"));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
