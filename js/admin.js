@@ -3,7 +3,7 @@
    ----------------------------------------------------------------------------
    This file is the Node-tested half: reference finding (what blocks retiring
    a variable), the IMPACT PREVIEW (replay every saved scenario against the
-   candidate data and diff each against what it recorded - the one feature
+   live data and the candidate and diff the two - the one feature
    without which nobody dares edit a rule), the version log, and the text
    round trip the rule editor uses. The overlay is js/admin-ui.js; its apply
    path goes through the same validate-then-persist contract as every import.
@@ -52,29 +52,41 @@
     return out;
   }
 
-  /* Replay each saved run's own answers and overrides against the CANDIDATE
-     data, and diff what comes out against what the run recorded. The current
+  /* Replay each saved run's own answers and overrides against the LIVE data
+     and against the CANDIDATE, and diff the two: that difference is what THIS
+     edit does to the run. Diffing the candidate against what the run recorded
+     instead would pin every earlier applied change on the edit under review
+     (a run saved before last week's rule change shows that change forever).
+     A run whose live replay no longer matches its recording is flagged
+     `stale` so the table can say it was saved under older rules. The current
      sidebar state rides along as a pseudo-run supplied by the caller. */
+  function replay(d, run, fallbackTaxonomy) {
+    /* the answers as the engine sees them under THESE gates - the same
+       neutralizing the app applies before every build */
+    const answers = VSM.rules.effective(d.scenario.attributes, run.answers || {}, d.scenario.rules);
+    const m = VSM.schedule.build(d.process, d.taxonomy || fallbackTaxonomy,
+      answers, d.scenario.rules, d.scenario.attributes,
+      { derived: run.overrides || {}, tasks: run.taskOverrides || {} });
+    return m.nodes.map(n => n.id);
+  }
   function impact(data, candidate, runs) {
     return (runs || []).map(run => {
+      const recorded = run.includedKeys || [];
+      let now;
+      try { now = replay(data, run); } catch (e) { now = recorded; }
+      const rec = new Set(recorded);
+      const stale = now.length !== recorded.length || now.some(id => !rec.has(id));
       let after;
-      try {
-        /* the answers as the engine sees them under the CANDIDATE's gates -
-           the same neutralizing the app applies before every build */
-        const answers = VSM.rules.effective(candidate.scenario.attributes, run.answers || {}, candidate.scenario.rules);
-        const m = VSM.schedule.build(candidate.process, candidate.taxonomy || data.taxonomy,
-          answers, candidate.scenario.rules, candidate.scenario.attributes,
-          { derived: run.overrides || {}, tasks: run.taskOverrides || {} });
-        after = m.nodes.map(n => n.id);
-      } catch (e) {
-        return { runId: run.runId, name: run.name, error: e.message, added: [], removed: [], before: run.includedKeys.length, after: 0 };
+      try { after = replay(candidate, run, data.taxonomy); }
+      catch (e) {
+        return { runId: run.runId, name: run.name, error: e.message, added: [], removed: [], before: now.length, after: 0, stale };
       }
-      const was = new Set(run.includedKeys), now = new Set(after);
+      const was = new Set(now), next = new Set(after);
       return {
         runId: run.runId, name: run.name,
         added: after.filter(id => !was.has(id)),
-        removed: run.includedKeys.filter(id => !now.has(id)),
-        before: run.includedKeys.length, after: after.length
+        removed: now.filter(id => !next.has(id)),
+        before: now.length, after: after.length, stale
       };
     });
   }

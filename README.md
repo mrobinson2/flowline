@@ -74,6 +74,8 @@ The timeline views join in once tracking is in use: done rows step back with a g
 
 **Open process designer** (in the sidebar) edits what used to need a text editor: add, rename, reorder and delete stages and phases, assign phases to stages, move activities between phases, reorder rows, and sort every row into band order in one click. Changes happen on a working copy and apply only when the whole result validates — the same last-good-data contract as imports, so a half-finished edit can never blank the projector. Deleting a phase that still has activities moves them to the first remaining phase and says so.
 
+**Open admin mode** (beside it) edits which tasks fire, and when — without touching code or the spreadsheet. Named rules and each activity's inclusion condition are edited as expression text (`R_drRequired AND R_cloud`) with live compile feedback: the column of the mistake, a did-you-mean, completion of variable and rule names. Variables can be added, reordered and retired; retiring is blocked while anything still reads the variable, and the blockers are listed. Edits are staged, and the only way to apply them is through the **impact preview**: every saved scenario, plus what is on screen, is replayed against the live rules and the edited ones, and the table shows which tasks each one gains or loses. Applied changes pass the same validation gate as an import and are appended to a version log (last 100) that travels with the JSON export.
+
 ## Presentation mode
 
 Press **Presentation** for a fixed 1920x1080 composition: title, scenario summary, metrics strip, timeline, legend. Row height, bar height, fonts and margins are all computed from the row count, so 30 activities get generous bars and 80 still fit one slide without CSS scaling. Text stays vector-crisp.
@@ -227,7 +229,7 @@ js/               the engine (see below)   test/       run-tests.js, regressions
 tools/bundle.js   builds dist/             fixture/    a synthetic source workbook
 ```
 
-Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `progress` computing the tracking rollups over a scheduled model, `progress-render` drawing the Tracker view, `designer` editing stages, phases and row order, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
+Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `progress` computing the tracking rollups over a scheduled model, `progress-render` drawing the Tracker view, `designer` editing stages, phases and row order, `admin` and `admin-ui` editing the rule layer behind an impact preview, `runs` keeping saved scenarios, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
 
 `js/schema.js` is the file to edit when a column name changes: it declares every column, its aliases and its picklist, and the importer, validator and exporter all read from it.
 

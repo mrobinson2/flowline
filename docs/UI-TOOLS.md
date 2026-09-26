@@ -35,7 +35,7 @@ bottom:
   architecture route, the selection route, whether DR or a privacy review is
   required. Each cites the answers that produced it, and can be overridden
   with a recorded reason.
-* **Process** — opens the process designer (below).
+* **Process** — opens the process designer and admin mode (both below).
 * **Waste categories** — one chip per category with its count and removable
   days; click to isolate that category on the chart.
 * **Filters** — free-text search, responsible-team checkboxes, and the choice
@@ -87,6 +87,35 @@ band order in one click. Dependencies are deliberately not edited here —
 that stays in the details panel where the predecessor list lives:
 
 ![Designer, sequence tab](images/ui/designer-sequence.jpg)
+
+## Admin mode
+
+**Open admin mode** in the sidebar edits the rule layer: which tasks fire,
+and when. Four tabs over one working copy.
+
+**Variables** — the questions, in sidebar order. Add one (id, label, yes/no
+or a choice, section), move it, or retire it. A retire is refused while any
+activity condition, named rule, derivation, visibility gate or preset still
+reads the variable, and the refusal lists each of them.
+
+**Rules** and **Activities** — named rules and per-activity inclusion
+conditions as expression text. Every keystroke recompiles against the
+working variables: a mistake shows its column with a caret and a
+did-you-mean, and the word under the cursor completes from variable and rule
+names. A rule the grammar cannot express is edited as JSON rather than shown
+as something it is not.
+
+**History** — the version log: every applied change with its time, target,
+and before and after text.
+
+Edits are staged, not applied. **Preview impact** first validates the whole
+candidate (a rule that compiles but loops back on itself is refused here, and
+the live data is untouched), then replays every saved scenario and the
+on-screen one against the live rules and the edited ones. The difference is
+what this edit does to each: tasks added and removed, with the ids. A saved
+scenario that already differs from its recording because of an earlier
+change is marked *saved under older rules*, so an old change is never blamed
+on the edit under review. **Apply** is only on this screen.
 
 ## Import, paste, and the preview
 

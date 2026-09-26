@@ -82,7 +82,9 @@
     const el = $("#data-source");
     if (st.mode === "linked") el.textContent = "Linked to folder \u201c" + st.label + "\u201d. Reload re-reads the files; Save writes back to them.";
     else if (st.mode === "needs-permission") el.textContent = "A linked folder is remembered but the browser needs permission again. Click Reload.";
-    else if (o) el.textContent = "Data " + (o.processSource === "edited" ? "edited in this browser" : "loaded from a file") + ", not the shipped files. Link a folder or download process.data.js to keep it.";
+    /* process.data.js alone does not carry rules or questions; say so when they differ */
+    else if (o) el.textContent = "Data " + (o.processSource === "edited" ? "edited in this browser" : "loaded from a file") + ", not the shipped files. "
+      + (o.scenario ? "Link the data folder and Save, or Export \u25be JSON, to keep it (the questions and rules differ too)." : "Link a folder or download process.data.js to keep it.");
     else el.textContent = "Using the shipped data files. Link the data folder to edit them and reload in place.";
     $("#btn-reset-data").hidden = !o;
     $("#btn-save-folder").hidden = st.mode !== "linked";
@@ -1142,6 +1144,19 @@
     $("#btn-reset-data").hidden = false;
   }
 
+  /* Admin mode edits the rule layer: the process (activity conditions) and the
+     scenario (variables, named rules, the version log) move together. Same
+     pinning and read-back as a process edit. */
+  function saveRulesOverride(candidate) {
+    const override = pinLiveData(readOverride());
+    const issues = VSM.validate.run(candidate.process, override.taxonomy || VSM.data.taxonomy, candidate.scenario);
+    if (issues.errors.length) throw new Error(issues.errors[0]);
+    override.process = candidate.process;
+    override.scenario = candidate.scenario;
+    override.processSource = "edited";
+    describeSource(writeOverride(override));
+  }
+
   /* ------------------------------------------------------------ export + data loading */
   function slug(s) { return String(s || "value-stream").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""); }
   function exportTarget() {
@@ -1539,6 +1554,31 @@
         toast("Process structure updated");
       }
     });
+    $("#btn-admin").onclick = () => {
+      /* what is on screen rides along as a pseudo-run, so the preview answers
+         "what happens to THIS" as well as every saved scenario */
+      const current = model ? [{
+        runId: "current", name: "Current scenario",
+        answers: state.scenario, overrides: state.overrides, taskOverrides: state.taskOverrides,
+        includedKeys: model.nodes.map(n => n.id)
+      }] : [];
+      VSM.adminUI.open(data, {
+        runs: current.concat(VSM.runs.list()),
+        onApply: (candidate, changes) => {
+          try { saveRulesOverride(candidate); }
+          catch (e) { toast("Not applied: " + e.message, true); return false; }
+          data.process = candidate.process;
+          data.scenario = candidate.scenario;
+          /* a retired variable leaves the answers; an added one gets its default */
+          state.scenario = mergeScenario(data.scenario.attributes, state.scenario);
+          Object.keys(state.overrides).forEach(id => { if (!data.scenario.attributes.some(a => a.id === id)) delete state.overrides[id]; });
+          buildScenarioControls();
+          buildOwnerFilter();
+          rebuild();
+          toast(changes.length + " rule change" + (changes.length === 1 ? "" : "s") + " applied and logged");
+        }
+      });
+    };
     let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderChart, 120); });
     bindTooltip();
   }

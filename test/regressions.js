@@ -1313,6 +1313,14 @@ function form(extra = {}) {
       assert.ok(rb.removed.length >= 3 && rb.removed.every(id => /^dr-/.test(id) || id === "dr-test"), JSON.stringify(rb.removed));
       assert.equal(rb.added.length, 0);
       assert.equal(r4.removed.length + r4.added.length, 0, "a Tier 4 run must be untouched: " + JSON.stringify(r4));
+      assert.ok(!rb.stale && !r4.stale);
+      /* once that change is live, an unrelated edit must not be blamed for it:
+         the baseline is stale (recorded with DR) but this edit changes nothing */
+      const unrelated = clone(candidate);
+      unrelated.scenario.attributes.push({ id: "unused", label: "Unused", type: "boolean", default: false, section: 1 });
+      const [again] = V.admin.impact(candidate, unrelated, [baseline]);
+      assert.equal(again.added.length + again.removed.length, 0, JSON.stringify(again));
+      assert.ok(again.stale, "a run recorded under older rules is flagged stale");
       /* versions append and cap */
       const sc2 = { versions: [] };
       for (let i = 0; i < 105; i++) V.admin.pushVersion(sc2, { target: "t" + i, before: i, after: i + 1 });
