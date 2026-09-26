@@ -593,31 +593,65 @@
       };
       if (waste) a.waste = waste;
       if (noEstimate) a.noEstimate = true;
-      /* The matrix owns inclusion when it exists; the Applies When phrase is
-         then documentation only, kept on the activity for the details panel. */
+
+      /* Include Expression is the richest rule source and wins over the
+         matrix (precedence: expression > matrix > Applies When phrase; the
+         phrase stays display-only wherever either exists). A compile failure
+         is a warning and the task falls back to the next source - a broken
+         cell must never silently exclude a task. Without a Toggles tab the
+         expression compiles unchecked: there is no vocabulary to check
+         against, and validate.js still vets the compiled rule. */
+      let usedExpression = false;
+      const exprText = txt(r.includeExpression);
+      if (exprText) {
+        try {
+          const c = VSM.expr.compile(exprText, toggles || undefined, sheetRuleIds);
+          a.when = c.rule;
+          usedExpression = true;
+          (c.warnings || []).forEach(w => report.warnings.push(id + ": Include Expression: " + w));
+        } catch (e) {
+          report.warnings.push(id + ": Include Expression: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". Falling back to the Scenario Matrix / Applies When rule.");
+        }
+      }
+      if (txt(r.triggerExplanation)) a.triggerExplanation = txt(r.triggerExplanation);
+      const canO = txt(r.canOverride).toLowerCase();
+      if (canO === "yes" || canO === "governed") a.canOverride = canO;
+      else if (canO) report.warnings.push(id + ": Can Override '" + txt(r.canOverride) + "' is not Yes or Governed and was ignored.");
+      if (num(r.rulePriority) !== null) a.rulePriority = num(r.rulePriority);
+      if (txt(r.defaultIncluded)) a.defaultIncluded = /^(y|yes|true|1)$/i.test(txt(r.defaultIncluded));
+
+      /* The matrix owns inclusion when it exists and no expression claimed
+         the row; its duration MULTIPLIERS apply either way, because how long
+         a step takes is orthogonal to whether it is included. */
       if (matrix) {
         const entry = matrix.get(id);
         if (!entry) {
-          unmatchedInMatrix.push(id);
-          if (cond) a.when = cond.id;                       // fall back to the phrase for this row
+          if (!usedExpression) {
+            unmatchedInMatrix.push(id);
+            if (cond) a.when = cond.id;                     // fall back to the phrase for this row
+          }
         } else {
-          const rule = entryToRule(entry);
-          if (rule !== undefined) a.when = rule;
+          if (usedExpression) {
+            report.warnings.push(id + ": has both an Include Expression and a Scenario Matrix row; the expression wins for inclusion (matrix multipliers still apply).");
+          } else {
+            const rule = entryToRule(entry);
+            if (rule !== undefined) a.when = rule;
+            if (entry.require.length && entry.exclude.length) {
+              matrixConflicts.push({
+                id, name: a.name,
+                requiredBy: entry.require.map(c => c.header),
+                excludedBy: entry.exclude.map(c => c.header)
+              });
+            }
+          }
           if (entry.factors.length) {
             a.multipliers = entry.factors.map(f => ({
               when: f.col.rule, factor: f.factor,
               note: f.col.toggle.label + (f.col.header.indexOf("=") > 0 ? " (" + f.col.header.split("=")[1] + ")" : "") + " makes this " + f.factor + "x"
             }));
           }
-          if (entry.require.length && entry.exclude.length) {
-            matrixConflicts.push({
-              id, name: a.name,
-              requiredBy: entry.require.map(c => c.header),
-              excludedBy: entry.exclude.map(c => c.header)
-            });
-          }
         }
-      } else if (cond) a.when = cond.id;
+      } else if (cond && !usedExpression) a.when = cond.id;
       if (category === "milestone") a.milestone = true;
       /* the workbook's own Handoff step type is an explicit declaration, which
          is narrower and more deliberate than our owner-change detection */

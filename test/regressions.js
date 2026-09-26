@@ -867,5 +867,44 @@ function form(extra = {}) {
     assert.ok(issues3.errors.some(e => /loop/.test(e)), JSON.stringify(issues3.errors));
   });
 
+  await test("1.3.0: IncludeExpression wins over the matrix, falls back on a bad compile", () => {
+    const sheets = {
+      "Task List": [
+        ["ID", "Phase", "Task", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Include Expression", "Trigger Explanation", "Can Override", "Rule Priority", "Default Included"],
+        ["1", "P1", "Base", "", "8", "4", "", "", "", "10", "Yes"],
+        ["2", "P1", "Expression-gated", "1", "8", "4", "genAI = true", "Included for AI work", "Governed", "30", ""],
+        ["3", "P1", "Conflicted", "1", "8", "4", "genAI = true", "", "", "", ""],
+        ["4", "P1", "Broken expression", "1", "8", "4", "genAI AND", "", "", "", ""]
+      ],
+      "Toggles": [
+        ["Toggle ID", "Group", "Label", "Type", "Options", "Default"],
+        ["genAI", "Technical", "AI workload", "boolean", "", "No"]
+      ],
+      "Scenario Matrix": [
+        ["Task ID", "Task", "Baseline", "genAI"],
+        ["1", "Base", "Yes", ""],
+        ["2", "Expression-gated", "No", "R"],
+        ["3", "Conflicted", "Yes", ""],
+        ["4", "Broken expression", "No", "R"]
+      ]
+    };
+    const r = V.import.fromSheets(sheets, {});
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    const byId = Object.fromEntries(r.process.activities.map(a => [a.id, a]));
+    assert.deepEqual(byId["2"].when, { genAI: true });
+    assert.equal(byId["2"].triggerExplanation, "Included for AI work");
+    assert.equal(byId["2"].canOverride, "governed");
+    assert.equal(byId["2"].rulePriority, 30);
+    assert.equal(byId["1"].defaultIncluded, true);
+    assert.deepEqual(byId["3"].when, { genAI: true }, "expression must beat the matrix");
+    assert.ok(r.report.warnings.some(w => w.startsWith("3") && /expression wins/i.test(w)), JSON.stringify(r.report.warnings));
+    assert.ok(r.report.warnings.some(w => w.startsWith("4") && /column/i.test(w)), JSON.stringify(r.report.warnings));
+    assert.deepEqual(byId["4"].when, { genAI: true }, "task 4 falls back to its matrix rule");
+    const off = V.schedule.build(r.process, r.taxonomy, { genAI: false }, r.scenario.rules, r.scenario.attributes);
+    const on = V.schedule.build(r.process, r.taxonomy, { genAI: true }, r.scenario.rules, r.scenario.attributes);
+    assert.equal(off.nodes.length, 1);   // only the baseline task; 2, 3, 4 are all genAI-gated
+    assert.equal(on.nodes.length, 4);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
