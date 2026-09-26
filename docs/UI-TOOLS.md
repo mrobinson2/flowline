@@ -19,6 +19,13 @@ bottom:
   questions, say) stays hidden until its condition holds — remembering its
   answer across hide and show. Flip an answer and the chart, metrics and
   tracker recompute immediately.
+* **Result** — "39 of 69 tasks included · 9 gates · 198 d" and a **Why these
+  tasks?** button opening a drawer with an Included and an **Excluded** tab.
+  Every row cites the answers that decided it — "Excluded because: Service
+  tier = Tier 4" — and rows the register allows can be forced in or out;
+  governed gates say so and cannot be switched off. An assumptions banner
+  under the metrics lists missing estimates, overrides in force and an
+  undecided service tier.
 * **Derived by the engine** — chips for the values nobody is asked: the
   architecture route, the selection route, whether DR or a privacy review is
   required. Each cites the answers that produced it, and can be overridden

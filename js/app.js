@@ -505,7 +505,7 @@
     body.appendChild(h("div", { class: "dc-why" },
       (included ? "Included: " : "Excluded because: ") + whyText(r.when, included)));
     const allow = a && (a.canOverride || "yes");
-    if (a && r.when !== undefined) {
+    if (a) {
       if (ov !== undefined) {
         body.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => { delete state.taskOverrides[r.id]; rebuild(); } }, "Clear override"));
       } else if (included && allow === "governed") {

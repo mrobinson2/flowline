@@ -163,6 +163,8 @@ Conditions are declarative and can be named once and reused:
 
 Some answers the engine works out for itself. You describe the workload — what data it holds, its service tier, whether an approved pattern fits — and **derived values** (the architecture route, whether a privacy review or DR is required) are computed and shown as chips that cite the specific answers behind them: *Because: Service tier = Tier 3, Pattern conforms = Yes*. A derived value can be overridden, and an override is sticky — it wins over the derivation until it is cleared — and carries a recorded reason where the data demands one. Nobody is asked "do you need a privacy review?"; they say what data is involved, and the review follows.
 
+Every included and excluded task can say why. The sidebar's result summary opens a drawer with an Included and an **Excluded** tab — the one reviewers actually argue with — each row citing the answers that decided it. Rows the register marks overridable can be forced in or out (recorded, badged, and surfaced on an assumptions banner); a governed gate refuses to be switched off.
+
 Toggles do not only add and remove steps, they change how long a step takes. A Scenario Matrix cell holding a number both requires the task and multiplies its duration, because an architecture review for a catalog pattern is not the review a greenfield build gets.
 
 Where one toggle requires a step and another excludes it, required wins and the collision is reported by name. A governance tool that can silently drop a control because two toggles disagreed will eventually embarrass somebody.
