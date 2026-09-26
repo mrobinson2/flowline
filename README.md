@@ -204,6 +204,7 @@ When a load fails validation the previous chart stays on screen and the errors a
 
 ```bash
 node test/run-tests.js                                # arithmetic, against the fixture
+node test/expr-tests.js                               # the expression-language compiler
 node test/regressions.js                              # security and correctness regressions
 IMPORT_FILE=/path/to/real.xlsx node test/run-tests.js # point it at your own workbook
 ONLY="quadratic" node test/regressions.js             # run one regression group
