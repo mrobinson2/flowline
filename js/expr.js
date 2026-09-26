@@ -253,27 +253,33 @@
     return warnings;
   }
 
-  /* nearest name by lowercase equality or single-character difference */
+  /* nearest name: case-only difference, one edit, or a one-edit prefix of a
+     longer candidate (so 'Hostng' finds 'HostingTarget'). */
   function near(name, candidates) {
     const low = name.toLowerCase();
-    let best = null;
-    for (const c of candidates) {
-      const cl = c.toLowerCase();
-      if (cl === low) return c;
-      if (Math.abs(cl.length - low.length) > 1) continue;
+    const d1 = (a, b) => {                                   // edit distance <= 1
+      if (a === b) return true;
+      if (Math.abs(a.length - b.length) > 1) return false;
       let i = 0, j = 0, diff = 0;
-      while (i < low.length && j < cl.length) {
-        if (low[i] === cl[j]) { i++; j++; continue; }
-        diff++;
-        if (diff > 1) break;
-        if (low.length > cl.length) i++;
-        else if (cl.length > low.length) j++;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++diff > 1) return false;
+        if (a.length > b.length) i++;
+        else if (b.length > a.length) j++;
         else { i++; j++; }
       }
-      diff += (low.length - i) + (cl.length - j);
-      if (diff <= 1 && !best) best = c;
+      return diff + (a.length - i) + (b.length - j) <= 1;
+    };
+    for (const c of candidates) if (c.toLowerCase() === low) return c;
+    for (const c of candidates) if (d1(low, c.toLowerCase())) return c;
+    if (low.length >= 5) {
+      for (const c of candidates) {
+        const cl = c.toLowerCase();
+        if (cl.length > low.length &&
+            (d1(low, cl.slice(0, low.length)) || d1(low, cl.slice(0, low.length + 1)))) return c;
+      }
     }
-    return best;
+    return null;
   }
 
   function compile(text, attrDefs, ruleIds) {

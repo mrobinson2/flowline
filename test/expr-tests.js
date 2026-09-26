@@ -84,4 +84,38 @@ test("syntax errors carry a 1-based column", () => {
   fails("", /empty/i);
 });
 
+const DEFS = [
+  { id: "RuntimeModel", type: "multi", options: [{ value: "IaaS" }, { value: "PaaS" }] },
+  { id: "HostingTarget", type: "enum", options: [{ value: "Azure" }, { value: "OnPrem" }] },
+  { id: "InboundInternet", type: "boolean" },
+  { id: "ServiceTier", type: "enum", options: [{ value: "Tier0" }, { value: "Tier1" }] }
+];
+const checked = t => V.expr.compile(t, DEFS, ["R_ProdBound"]);
+const failsChecked = (t, re) => {
+  try { checked(t); } catch (e) { assert.match(e.message, re, t + " -> " + e.message); return; }
+  assert.fail("expected type error for: " + t);
+};
+
+test("type checks: multi with =, enum with INCLUDES, unknown attr, unknown rule", () => {
+  failsChecked("RuntimeModel = IaaS", /INCLUDES|INTERSECTS/);
+  failsChecked("RuntimeModel IN [IaaS]", /INCLUDES|INTERSECTS/);
+  failsChecked("HostingTarget INCLUDES Azure", /multi-select/i);
+  failsChecked("InboundInternet = Azure", /true or false/i);
+  failsChecked("Hostng = Azure", /HostingTarget/);              // did-you-mean
+  failsChecked("R_Prodbound", /R_ProdBound/);                   // did-you-mean on rules
+  failsChecked("HostingTarget", /choice|= <value>/i);           // bare boolean form on an enum
+});
+
+test("unknown enum values warn, not fail", () => {
+  const r = checked("HostingTarget = AWS");
+  assert.deepEqual(r.rule, { HostingTarget: "AWS" });
+  assert.equal(r.warnings.length, 1);
+  assert.match(r.warnings[0], /AWS/);
+});
+
+test("valid checked expressions pass clean", () => {
+  assert.equal(checked("R_ProdBound AND RuntimeModel INTERSECTS [IaaS, PaaS]").warnings.length, 0);
+  assert.equal(checked("ServiceTier IN [Tier0, Tier1] OR InboundInternet").warnings.length, 0);
+});
+
 console.log("\n" + passed + " expr tests passed, 0 failed");
