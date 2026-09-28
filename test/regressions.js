@@ -1326,7 +1326,7 @@ function form(extra = {}) {
       for (let i = 0; i < 105; i++) V.admin.pushVersion(sc2, { target: "t" + i, before: i, after: i + 1 });
       assert.equal(sc2.versions.length, 100);
       assert.equal(sc2.versions[99].target, "t104");
-      assert.ok(sc2.versions[0].ts);
+      assert.ok(sc2.versions[0].timestamp); assert.equal(sc2.versions[0].author, "", "author defaults to empty, never missing");
     } finally { delete global.localStorage; }
   });
 
@@ -1374,6 +1374,79 @@ function form(extra = {}) {
     /* errors carry a column and a suggestion */
     try { V.admin.textToRule("serviceTer = \"Tier 1\"", d.scenario.attributes, ids); assert.fail("should throw"); }
     catch (e) { assert.equal(e.column, 1); assert.ok(/did you mean 'serviceTier'/.test(e.message), e.message); }
+  });
+
+  await test("1.4.0: admin edits survive a workbook export and re-import", async () => {
+    const toMatrix = sh => [sh.headers].concat(sh.rows.map(r => sh.headers.map(h => r[h] === undefined ? "" : r[h])));
+    const everything = d => { const all = {}; d.process.activities.forEach(a => { all[a.id] = true; }); return all; };
+    const roundTrip = d => {
+      const m = V.schedule.build(d.process, d.taxonomy, V.rules.defaults(d.scenario.attributes), d.scenario.rules, d.scenario.attributes, { derived: {}, tasks: everything(d) });
+      const sheets = {};
+      V.exportWorkbook.sheets(m, { scenarioCfg: d.scenario, scenarioSummary: "" }).forEach(sh => { sheets[sh.name] = toMatrix(sh); });
+      return { sheets, r: V.import.fromSheets(sheets, {}) };
+    };
+    const included = (d, sc) => JSON.stringify(V.schedule.build(d.process, d.taxonomy,
+      V.rules.effective(d.scenario.attributes, sc, d.scenario.rules), d.scenario.rules, d.scenario.attributes).nodes.map(n => n.id).sort());
+
+    const buf = fs.readFileSync(path.join(__dirname, "..", "fixture", "sample-value-stream.xlsx"));
+    const d = await V.import.fromWorkbook(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {});
+    const attrs = () => d.scenario.attributes, ids = () => Object.keys(d.scenario.rules);
+    /* the edits admin mode makes, through the same helpers it uses */
+    d.scenario.rules.R_TopTier = V.admin.textToRule('tier IN ["Tier 0"]', attrs(), ids()).rule;
+    attrs().splice(2, 0, { id: "residency", label: "Data must stay in-region?", type: "boolean", default: false, section: 5, group: "Sourcing" });
+    const a44 = d.process.activities.find(a => a.id === "44");            // matrix-sourced, carries a multiplier
+    V.admin.setCondition(a44, V.admin.textToRule("newService AND R_TopTier", attrs(), ids()).rule);
+    const a45 = d.process.activities.find(a => a.id === "45");
+    V.admin.setCondition(a45, V.admin.textToRule("residency OR R_Sourcing", attrs(), ids()).rule);
+    V.admin.pushVersion(d.scenario, { author: "A. Architect", target: "rule R_TopTier", before: "tier IN [...]", after: 'tier IN ["Tier 0"]' });
+    assert.equal(V.validate.run(d.process, d.taxonomy, d.scenario).errors.length, 0);
+    assert.equal(a44.appliesWhen, undefined, "an edited condition drops the stale workbook phrase");
+
+    const { sheets, r } = roundTrip(d);
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    /* nothing new beyond what the source workbook itself warns about, plus the
+       expected note on the two edited rows (they keep their matrix rows, which
+       still supply multipliers) */
+    const noise = r.report.warnings.filter(w => d.report.warnings.indexOf(w) < 0
+      && !/^(44|45): has both an Include Expression and a Scenario Matrix row/.test(w));
+    assert.deepEqual(noise, [], "unexpected warnings: " + JSON.stringify(noise));
+    assert.deepEqual(r.scenario.rules.R_TopTier, { tier: { in: ["Tier 0"] } });
+    assert.deepEqual(r.process.activities.find(a => a.id === "44").when, a44.when);
+    assert.equal(r.process.activities.find(a => a.id === "44").multipliers.length, 1, "the matrix multiplier still applies");
+    assert.deepEqual(r.process.activities.find(a => a.id === "45").when, a45.when);
+    assert.deepEqual(r.scenario.attributes.map(a => a.id), attrs().map(a => a.id), "variable order");
+    assert.equal(r.scenario.attributes.find(a => a.id === "residency").section, 5);
+    assert.equal(JSON.stringify(r.scenario.versions), JSON.stringify(d.scenario.versions), "version log incl. author");
+    /* and the thing that matters: every scenario includes the same tasks */
+    const base = V.rules.defaults(attrs());
+    const scs = [base, Object.assign({}, base, { residency: true }), Object.assign({}, base, { tier: "Tier 1", newService: true })]
+      .concat(d.scenario.presets.map(p => V.rules.applyPreset(attrs(), base, p)));
+    scs.forEach((sc, i) => assert.equal(included(r, sc), included(d, sc), "scenario #" + i + " changed across the round trip"));
+    /* a second trip is a fixed point: same sheets */
+    const again = roundTrip(r).sheets;
+    ["Task List", "Toggles", "Rules", "Scenario Matrix", "Versions"].forEach(n =>
+      assert.equal(JSON.stringify(again[n]), JSON.stringify(sheets[n]), n + " drifted on the second trip"));
+
+    /* a retired variable's (necessarily empty) matrix column is not written back */
+    const g = JSON.parse(JSON.stringify(d));
+    g.scenario.matrixSheet.headers.push("ghost");
+    g.scenario.matrixSheet.rows.forEach(row => row.push(""));
+    assert.ok(!roundTrip(g).sheets["Scenario Matrix"][0].includes("ghost"));
+
+    /* the shipped data (bare rule ids, no workbook of origin): conditions and
+       named rules come back, and no phantom switches appear */
+    const sd = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const s2 = roundTrip(sd).r;
+    assert.equal(s2.report.errors.length, 0, JSON.stringify(s2.report.errors));
+    assert.equal(s2.scenario.attributes.length, sd.scenario.attributes.length, "phantom switches from Applies When phrases");
+    /* compared as canonical text: {a, b} and {all: [a, b]} are the same rule,
+       and the printer names every rule reference R_ either way */
+    const canon = rule => V.admin.ruleToText(rule === undefined ? true : rule).text;
+    sd.process.activities.forEach(a => {
+      if (V.admin.ruleToText(a.when === undefined ? true : a.when).json) return;
+      assert.equal(canon(s2.process.activities.find(x => x.id === a.id).when), canon(a.when), a.id);
+    });
+    Object.keys(sd.scenario.rules).forEach(id => assert.equal(canon(s2.scenario.rules["R_" + id]), canon(sd.scenario.rules[id]), id));
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

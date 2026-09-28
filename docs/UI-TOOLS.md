@@ -105,7 +105,7 @@ did-you-mean, and the word under the cursor completes from variable and rule
 names. A rule the grammar cannot express is edited as JSON rather than shown
 as something it is not.
 
-**History** — the version log: every applied change with its time, target,
+**History** — the version log: every applied change with who applied it, its time, target,
 and before and after text.
 
 Edits are staged, not applied. **Preview impact** first validates the whole
@@ -115,7 +115,16 @@ on-screen one against the live rules and the edited ones. The difference is
 what this edit does to each: tasks added and removed, with the ids. A saved
 scenario that already differs from its recording because of an earlier
 change is marked *saved under older rules*, so an old change is never blamed
-on the edit under review. **Apply** is only on this screen.
+on the edit under review. **Apply** is only on this screen, and it needs a
+name for the log (remembered in this browser).
+
+The Excel export carries the edits: the Rules sheet is written from the live
+rules, the Toggles sheet from the live variables (section, group, Shown When,
+derivation), each edited task's condition goes in its Include Expression
+cell, which wins over its Scenario Matrix row on re-import (the row still
+supplies duration multipliers), and the log goes out as a Versions sheet.
+Enabled When gates and derived choices with ordered cases have no workbook
+column; Export Notes says so, and the JSON export keeps everything.
 
 ## Import, paste, and the preview
 

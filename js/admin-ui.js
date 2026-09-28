@@ -38,6 +38,11 @@ VSM.adminUI = (function () {
     return true;
   };
   const ID = /^[A-Za-z][A-Za-z0-9_]*$/;
+  /* who applies a change goes in the log; remembered per browser, a
+     convenience only - the name is re-read from the field on every apply */
+  const AUTHOR_KEY = "vsm.admin.author";
+  const loadAuthor = () => { try { return localStorage.getItem(AUTHOR_KEY) || ""; } catch (e) { return ""; } };
+  const saveAuthor = v => { try { localStorage.setItem(AUTHOR_KEY, v); } catch (e) { /* private mode */ } };
 
   function open(data, opts) {
     if (document.getElementById("admin-overlay")) return;
@@ -50,7 +55,7 @@ VSM.adminUI = (function () {
     const runs = (opts && opts.runs) || [];
     const onApply = (opts && opts.onApply) || (() => {});
 
-    let tab = "rules", mode = "edit", editing = null, search = "", note = "", blocked = null;
+    let tab = "rules", mode = "edit", editing = null, search = "", note = "", blocked = null, author = loadAuthor();
     /* staged changes, one per target; `before` is kept from the first edit so
        the version log says what the live data had, not an intermediate draft */
     const pending = [];
@@ -220,7 +225,7 @@ VSM.adminUI = (function () {
             h("button", { class: "ghost small", type: "button", onclick: () => { editing = editing === key ? null : key; render(); } }, editing === key ? "Close" : "Edit")),
           editing === key
             ? editor(a.when === undefined ? true : a.when, rule => {
-              if (rule === true) delete a.when; else a.when = rule;
+              VSM.admin.setCondition(a, rule);
               const was = live && live.when !== undefined ? text(live.when) : "TRUE";
               stage(target, was, rule === true ? "TRUE" : text(rule));
             })
@@ -277,8 +282,10 @@ VSM.adminUI = (function () {
         label: h("input", { class: "input", placeholder: "Question shown in the sidebar" }),
         type: h("select", { class: "select short" }, ["boolean", "enum", "multi"].map(t => h("option", { value: t }, t === "boolean" ? "yes / no" : t === "enum" ? "one of" : "any of"))),
         options: h("input", { class: "input", placeholder: "options, comma separated (one of / any of)" }),
-        section: h("select", { class: "select short", title: "Sidebar section" }, [1, 2, 3, 4, 5, 6].map(n => h("option", { value: String(n) }, "Section " + n)))
+        section: h("select", { class: "select short", title: "Sidebar section" }, [1, 2, 3, 4, 5, 6].map(n => h("option", { value: String(n) }, "Section " + n))),
+        group: h("input", { class: "input short", placeholder: "Group heading", list: "admin-groups", title: "The heading it sits under in its section; blank uses the section's last group" })
       };
+      const groups = h("datalist", { id: "admin-groups" }, [...new Set(attrs().map(a => a.group).filter(Boolean))].map(g => h("option", { value: g })));
       const addErr = h("div", { class: "admin-feedback" });
       const add = () => {
         addErr.innerHTML = "";
@@ -290,7 +297,11 @@ VSM.adminUI = (function () {
         if (attrs().some(a => a.id === id) || ruleIds().includes(id)) return fail("'" + id + "' is already a variable or rule.");
         if (!label) return fail("Give it a label - it is the question people answer.");
         if (type !== "boolean" && opts.length < 2) return fail("A choice needs at least two options.");
-        const attr = { id, label, type, section: Number(f.section.value) };
+        const section = Number(f.section.value);
+        /* a group keeps the sidebar heading (and the workbook's Group cell) stable */
+        const inSection = attrs().filter(a => a.section === section && a.group);
+        const group = f.group.value.trim() || (inSection.length ? inSection[inSection.length - 1].group : "Options");
+        const attr = { id, label, type, section, group };
         if (type === "boolean") attr.default = false;
         else { attr.options = opts.map(v => ({ value: v })); attr.default = type === "multi" ? [] : opts[0]; }
         attrs().push(attr);
@@ -304,7 +315,7 @@ VSM.adminUI = (function () {
         list,
         h("div", { class: "admin-add" },
           h("div", { class: "designer-row" }, f.id, f.label),
-          h("div", { class: "designer-row" }, f.type, f.options, f.section,
+          h("div", { class: "designer-row" }, f.type, f.options, f.section, f.group, groups,
             h("button", { class: "ghost small", type: "button", onclick: add }, "+ Add variable")),
           addErr));
     }
@@ -318,7 +329,7 @@ VSM.adminUI = (function () {
         h("div", { class: "designer-list" }, v.map(e => h("div", { class: "admin-row" },
           h("div", { class: "admin-row-head" },
             h("code", { class: "admin-id" }, e.target),
-            h("span", { class: "designer-count" }, String(e.ts || "").replace("T", " ").slice(0, 16))),
+            h("span", { class: "designer-count" }, (e.author ? e.author + " \u00b7 " : "") + String(e.timestamp || e.ts || "").replace("T", " ").slice(0, 16))),
           h("div", { class: "admin-diff" },
             h("code", { class: "admin-text muted" }, String(e.before)), " → ", h("code", { class: "admin-text" }, String(e.after)))))));
     }
@@ -345,9 +356,11 @@ VSM.adminUI = (function () {
         }).flat()));
       return h("div", null,
         h("p", { class: "admin-summary" },
-          changed.length
-            ? changed.length + " of " + rows.length + " scenario" + (rows.length === 1 ? "" : "s") + " change shape under these edits."
-            : "None of the " + rows.length + " scenario" + (rows.length === 1 ? "" : "s") + " change shape under these edits."),
+          rows.length === 1
+            ? (changed.length ? "The scenario changes shape under these edits." : "The scenario does not change shape under these edits.")
+            : changed.length
+              ? changed.length + " of " + rows.length + " scenarios change shape under these edits."
+              : "None of the " + rows.length + " scenarios change shape under these edits."),
         h("p", { class: "hint" }, "Each scenario is replayed with its own answers against the live rules and against the edited ones; the difference is what these edits do to it."),
         runs.length <= 1 ? h("p", { class: "hint" }, "Only the on-screen scenario is replayed. Save scenarios (sidebar, Saved scenarios) to check an edit against the cases you care about.") : null,
         table,
@@ -382,15 +395,24 @@ VSM.adminUI = (function () {
         h("span", { class: "hint" }, n ? n + " staged change" + (n === 1 ? "" : "s") + ". Nothing is live until you apply from the impact preview." : "Stage an edit, then preview its impact on every saved scenario before applying."),
         h("button", { class: "ghost", type: "button", onclick: close }, n ? "Discard" : "Close"));
       if (mode === "impact") {
-        foot.appendChild(h("button", { class: "ghost", type: "button", onclick: () => { mode = "edit"; render(); } }, "Back to editing"));
-        foot.appendChild(h("button", {
+        const who = h("input", { class: "input short admin-author", placeholder: "Your name", "aria-label": "Applied by", title: "Recorded against each change in the version log" });
+        who.value = author;
+        const apply = h("button", {
           class: "primary", type: "button", onclick: () => {
+            author = who.value.trim();
+            if (!author) { who.focus(); return; }
             if (check().errors.length) { mode = "edit"; render(); return; }
+            saveAuthor(author);
             const candidate = VSM.deepClone(work);
-            pending.forEach(p => VSM.admin.pushVersion(candidate.scenario, p));
+            pending.forEach(p => VSM.admin.pushVersion(candidate.scenario, Object.assign({ author }, p)));
             if (onApply(candidate, pending.slice()) !== false) close();
           }
-        }, "Apply " + n + " change" + (n === 1 ? "" : "s")));
+        }, "Apply " + n + " change" + (n === 1 ? "" : "s"));
+        apply.disabled = !author.trim();
+        who.addEventListener("input", () => { author = who.value; apply.disabled = !author.trim(); });
+        foot.appendChild(h("label", { class: "admin-by" }, "Applied by ", who));
+        foot.appendChild(h("button", { class: "ghost", type: "button", onclick: () => { mode = "edit"; render(); } }, "Back to editing"));
+        foot.appendChild(apply);
       } else {
         const prev = h("button", {
           class: "primary", type: "button", onclick: () => {

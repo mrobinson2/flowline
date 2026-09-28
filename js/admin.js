@@ -122,14 +122,27 @@
     return { rule: mapRefs(c.rule, r => (back.has(r) ? back.get(r) : r)), warnings: c.warnings };
   }
 
-  /* every applied change leaves a row; the log travels with the scenario */
+  /* An edited condition is authored text from now on: it is exported as the
+     row's Include Expression (which wins over the Scenario Matrix on
+     re-import), and the workbook's own phrase and explanation are dropped
+     because they describe the rule that was replaced. TRUE means always. */
+  function setCondition(activity, rule) {
+    if (rule === true) delete activity.when; else activity.when = rule;
+    activity.whenSource = "expression";
+    delete activity.appliesWhen;
+    delete activity.triggerExplanation;
+    return activity;
+  }
+
+  /* every applied change leaves a row { timestamp, author, target, before,
+     after }; the log travels with the scenario (JSON and workbook export) */
   function pushVersion(scenario, entry) {
     if (!Array.isArray(scenario.versions)) scenario.versions = [];
-    scenario.versions.push(Object.assign({ ts: new Date().toISOString() }, entry));
+    scenario.versions.push(Object.assign({ timestamp: new Date().toISOString(), author: "" }, entry));
     while (scenario.versions.length > 100) scenario.versions.shift();
     return scenario.versions;
   }
 
-  VSM.admin = { referencesTo, impact, pushVersion, ruleToText, textToRule };
+  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.admin;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

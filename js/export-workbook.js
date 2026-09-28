@@ -79,6 +79,30 @@
     catch (e) { return typeof a.when === "string" ? a.when : JSON.stringify(a.when); }
   }
 
+  /* The Include Expression cell (column AB). Written for conditions that ARE
+     expressions - authored in the app, or imported from an expression cell -
+     and for data that never came from a workbook (no Applies When phrase,
+     no matrix of origin). A matrix- or phrase-sourced row stays blank so the
+     re-import reads it from where it came from. TRUE is written for an
+     authored "always", or the matrix row would take back over. A rule the
+     grammar cannot say stays blank and is counted in Export Notes. */
+  function includeExpression(a, stats) {
+    const authored = a.whenSource === "expression";
+    const native = a.whenSource === undefined && a.appliesWhen === undefined && a.when !== undefined;
+    if (!authored && !native) return "";
+    if (a.when === undefined) return "TRUE";
+    const t = VSM.admin.ruleToText(a.when);
+    if (t.json) { if (stats) stats.unrepresentable.push(a.id); return ""; }
+    return t.text;
+  }
+  /* expression text for a Toggles cell; unexpressible shapes are left blank */
+  function ruleText(rule, what, stats) {
+    const t = VSM.admin.ruleToText(rule);
+    if (t.json) { if (stats) stats.unrepresentable.push(what); return ""; }
+    return t.text;
+  }
+  const yesNo = v => (v === true ? "Yes" : v === false ? "No" : "");
+
   /* --------------------------------------------------------------- the rows */
   function taskRows(model, opts) {
     const perDay = (model.process && model.process.hoursPerDay) || VSM.schema.HOURS_PER_DAY;
@@ -152,7 +176,14 @@
           ((a.multipliers || []).length ? " (" + a.multipliers.map(x => x.note).join("; ") + ")" : "") : ""]
           .filter(Boolean).join(" | "),
         /* column Z: the two-level rollup, blank when the data has no stages */
-        "Stage": stageLabel(a.phase)
+        "Stage": stageLabel(a.phase),
+        /* AA..AF: the rule layer, so an edited condition survives the trip */
+        "Rule ID": txt(a.ruleId),
+        "Include Expression": includeExpression(a, opts && opts.stats),
+        "Trigger Explanation": txt(a.triggerExplanation),
+        "Default Included": yesNo(a.defaultIncluded),
+        "Can Override": a.canOverride === "governed" ? "Governed" : a.canOverride === "yes" ? "Yes" : "",
+        "Rule Priority": a.rulePriority === undefined || a.rulePriority === null ? "" : a.rulePriority
       };
     });
   }
@@ -210,7 +241,7 @@
 
   /* ------------------------------------------------------------- the tabs */
   function sheets(model, opts) {
-    opts = opts || {};
+    opts = Object.assign({}, opts || {}, { stats: { unrepresentable: [] } });
     const TASK_HEADERS = VSM.schema.TASK.map(c => c.header);
     const EDGE_HEADERS = VSM.schema.EDGES.map(c => c.header);
     const out = [
@@ -319,7 +350,16 @@
           "Options": (a.options || []).map(o => o.value).join(";"),
           "Default": Array.isArray(a.default) ? a.default.join(";") : a.default === true ? "Yes" : a.default === false ? "No" : txt(a.default),
           "Implies": (a.implies || []).join(";"),
-          "Help": a.help || ""
+          "Help": a.help || "",
+          "Section": a.section === undefined ? "" : a.section,
+          "Shown When": a.diagnosticOnly ? "Diagnostic mode only" : a.shownWhen === undefined ? "" : ruleText(a.shownWhen, "Shown When of " + a.id, opts.stats),
+          "Derived": a.derived ? "Yes" : "",
+          /* the workbook's own prose if it had some; else a boolean derivation
+             as an expression. Ordered enum cases have no cell syntax. */
+          "Derivation": a.derivation ? a.derivation : a.derive && a.derive.when !== undefined ? ruleText(a.derive.when, "Derivation of " + a.id, opts.stats) : "",
+          "Required": a.required ? "Yes" : "",
+          "Override Requires Reason": a.overrideRequiresReason ? "Yes" : "",
+          "Audit Relevant": a.auditRelevant ? "Yes" : ""
         }))
       });
       if ((cfg.presets || []).length) {
@@ -342,28 +382,64 @@
           })
         });
       }
-      if (cfg.rulesSheet && Array.isArray(cfg.rulesSheet.headers) && cfg.rulesSheet.headers.length) {
+      /* The Rules sheet, written from the LIVE rules: an expression edited in
+         admin mode lands in its Expression cell. Rows keep the workbook's
+         own columns and prose (matched by id); new rules are appended, and a
+         rule that no longer exists is not written. Phrase shims are
+         plumbing and stay off it. Ids go out in their R_ form. */
+      const shims = new Set(cfg.phraseRules || []);
+      const ruleIds = Object.keys(cfg.rules || {}).filter(id => !shims.has(id));
+      if (ruleIds.length) {
+        const headers = cfg.rulesSheet && Array.isArray(cfg.rulesSheet.headers) && cfg.rulesSheet.headers.length
+          ? cfg.rulesSheet.headers : VSM.schema.RULES.map(c => c.header);
+        const hm = VSM.schema.matchHeaders(headers, VSM.schema.RULES).index;
+        const hid = headers[hm.id], hex = headers[hm.expression];
+        const byId = new Map(((cfg.rulesSheet && cfg.rulesSheet.rows) || []).map(row => [txt(row[hm.id]), row]));
+        const rows = [];
+        ruleIds.forEach(id => {
+          const t = VSM.admin.ruleToText(cfg.rules[id]);
+          if (t.json) { opts.stats.unrepresentable.push("rule " + id); return; }
+          const name = VSM.admin.alias(id), was = byId.get(name), meta = (cfg.ruleMeta || {})[name] || (cfg.ruleMeta || {})[id] || {};
+          const o = Object.create(null);
+          headers.forEach((hd, i) => { o[hd] = was && was[i] !== undefined && was[i] !== null ? was[i] : ""; });
+          o[hid] = name;
+          o[hex] = t.text;
+          if (!was) {
+            if (hm.means !== undefined) o[headers[hm.means]] = meta.means || "";
+            if (hm.why !== undefined) o[headers[hm.why]] = meta.why || "";
+          }
+          rows.push(o);
+        });
+        out.push({ name: "Rules", headers, widths: headers.map((h, i) => (i === 0 ? 18 : i === 1 ? 60 : 44)), rows });
+      }
+      if (cfg.matrixSheet && Array.isArray(cfg.matrixSheet.headers) && cfg.matrixSheet.headers.length) {
+        /* A retired variable's column goes. Retiring is blocked while any
+           task reads the variable, so the column is empty by then - and a
+           column naming no toggle warns on every re-import. */
+        const fixed = VSM.schema.MATRIX_FIXED.map(VSM.schema.norm);
+        const live = new Set(cfg.attributes.map(a => VSM.schema.norm(a.id)));
+        const keep = cfg.matrixSheet.headers.map((hd, i) => {
+          if (fixed.indexOf(VSM.schema.norm(hd)) >= 0) return i;
+          const c = VSM.schema.parseCondition(txt(hd));
+          return c && !live.has(VSM.schema.norm(c.id)) ? -1 : i;
+        }).filter(i => i >= 0);
+        const headers = keep.map(i => cfg.matrixSheet.headers[i]);
         out.push({
-          name: "Rules",
-          headers: cfg.rulesSheet.headers,
-          widths: cfg.rulesSheet.headers.map((h, i) => (i === 0 ? 18 : i === 1 ? 60 : 44)),
-          rows: cfg.rulesSheet.rows.map(row => {
+          name: "Scenario Matrix",
+          headers,
+          widths: headers.map((h, i) => (i === 0 ? 12 : i === 1 ? 44 : i === 2 ? 10 : 14)),
+          rows: cfg.matrixSheet.rows.map(row => {
             const o = Object.create(null);
-            cfg.rulesSheet.headers.forEach((hd, i) => { o[hd] = row[i] === undefined || row[i] === null ? "" : row[i]; });
+            keep.forEach(i => { o[cfg.matrixSheet.headers[i]] = row[i] === undefined || row[i] === null ? "" : row[i]; });
             return o;
           })
         });
       }
-      if (cfg.matrixSheet && Array.isArray(cfg.matrixSheet.headers) && cfg.matrixSheet.headers.length) {
+      /* the admin mode's version log (spec §4.7: carried through export) */
+      if ((cfg.versions || []).length) {
         out.push({
-          name: "Scenario Matrix",
-          headers: cfg.matrixSheet.headers,
-          widths: cfg.matrixSheet.headers.map((h, i) => (i === 0 ? 12 : i === 1 ? 44 : i === 2 ? 10 : 14)),
-          rows: cfg.matrixSheet.rows.map(row => {
-            const o = Object.create(null);
-            cfg.matrixSheet.headers.forEach((hd, i) => { o[hd] = row[i] === undefined || row[i] === null ? "" : row[i]; });
-            return o;
-          })
+          name: "Versions", headers: VSM.schema.VERSIONS.map(c => c.header), widths: [22, 20, 34, 50, 50],
+          rows: cfg.versions.map(v => ({ "Timestamp": txt(v.timestamp || v.ts), "Author": txt(v.author), "Target": txt(v.target), "Before": txt(v.before), "After": txt(v.after) }))
         });
       }
     }
@@ -380,7 +456,8 @@
         { Field: "Hours per day", Value: (model.process && model.process.hoursPerDay) || VSM.schema.HOURS_PER_DAY },
         { Field: "Critical path", Value: r2(model.metrics.currentElapsed / (/hour/i.test(String((model.process && model.process.units) || "")) ? ((model.process && model.process.hoursPerDay) || 8) : 1)) + " days" },
         { Field: "Columns R..X", Value: "Recomputed from this export's scenario, not copied from the source workbook." },
-        { Field: "Scenario Matrix", Value: "Copied verbatim from the imported workbook. In-app rule edits are not yet written back into it." },
+        { Field: "Rule layer", Value: "Rules, Toggles and Include Expression are written from the live data, so admin-mode edits survive a re-import. The Scenario Matrix is copied from the imported workbook; a task whose condition was edited in the app carries it in Include Expression, which takes precedence over its matrix row (the row's duration multipliers still apply)." },
+        { Field: "Not carried", Value: "Enabled When gates and derived choices with ordered cases have no workbook column; use the JSON export to keep them." + (opts.stats.unrepresentable.length ? " Not expressible as text, left blank: " + opts.stats.unrepresentable.join(", ") + "." : "") },
         { Field: "Caveat", Value: (model.process && model.process.caveat) || "Durations are estimates." }
       ]
     });
