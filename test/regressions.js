@@ -1314,6 +1314,12 @@ function form(extra = {}) {
       assert.equal(rb.added.length, 0);
       assert.equal(r4.removed.length + r4.added.length, 0, "a Tier 4 run must be untouched: " + JSON.stringify(r4));
       assert.ok(!rb.stale && !r4.stale);
+      /* a foreign run with no answers diffs rather than throws */
+      assert.equal(V.runs.diff({ includedKeys: [], totals: {} }, { includedKeys: [], totals: {}, answers: { x: 1 } }).changedAnswers.length, 1);
+      /* a run that no longer replays under the live data is flagged stale */
+      const brokenLive = clone(d); brokenLive.process.activities[0].predecessors = [brokenLive.process.activities[1].id, brokenLive.process.activities[0].id];
+      const [rs] = V.admin.impact(brokenLive, d, [baseline]);
+      assert.ok(rs.stale, "unreplayable run must read as stale: " + JSON.stringify(rs));
       /* once that change is live, an unrelated edit must not be blamed for it:
          the baseline is stale (recorded with DR) but this edit changes nothing */
       const unrelated = clone(candidate);

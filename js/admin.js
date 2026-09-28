@@ -72,10 +72,12 @@
   function impact(data, candidate, runs) {
     return (runs || []).map(run => {
       const recorded = run.includedKeys || [];
-      let now;
-      try { now = replay(data, run); } catch (e) { now = recorded; }
+      /* a run that no longer replays under the live data is stale by
+         definition; its recording is the best "before" there is */
+      let now, broken = false;
+      try { now = replay(data, run); } catch (e) { now = recorded; broken = true; }
       const rec = new Set(recorded);
-      const stale = now.length !== recorded.length || now.some(id => !rec.has(id));
+      const stale = broken || now.length !== recorded.length || now.some(id => !rec.has(id));
       let after;
       try { after = replay(candidate, run, data.taxonomy); }
       catch (e) {

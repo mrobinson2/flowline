@@ -58,7 +58,8 @@
     const inA = new Set(a.includedKeys), inB = new Set(b.includedKeys);
     const changed = [];
     const keys = new Set(Object.keys(a.answers || {}).concat(Object.keys(b.answers || {})));
-    keys.forEach(k => { if (!setEq(a.answers[k], b.answers[k])) changed.push({ id: k, from: a.answers[k], to: b.answers[k] }); });
+    const aa = a.answers || {}, ba = b.answers || {};             // an imported run may lack answers
+    keys.forEach(k => { if (!setEq(aa[k], ba[k])) changed.push({ id: k, from: aa[k], to: ba[k] }); });
     return {
       addedTasks: b.includedKeys.filter(id => !inA.has(id)),
       removedTasks: a.includedKeys.filter(id => !inB.has(id)),

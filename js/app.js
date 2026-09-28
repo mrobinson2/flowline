@@ -1559,7 +1559,8 @@
          "what happens to THIS" as well as every saved scenario */
       const current = model ? [{
         runId: "current", name: "Current scenario",
-        answers: state.scenario, overrides: state.overrides, taskOverrides: state.taskOverrides,
+        /* copies, as runs.record takes: the preview must never alias live state */
+        answers: VSM.deepClone(state.scenario), overrides: VSM.deepClone(state.overrides), taskOverrides: VSM.deepClone(state.taskOverrides),
         includedKeys: model.nodes.map(n => n.id)
       }] : [];
       VSM.adminUI.open(data, {
