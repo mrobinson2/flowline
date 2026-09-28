@@ -114,6 +114,32 @@
     return { scenario: resolved, derived: derivedIds, provenance, overridden };
   }
 
-  VSM.derive = { compute };
+  /* All leaves of a rule with their satisfied flags, labelled - the drawer's
+     "answers that decided it". A leaf that is itself a DERIVED attribute
+     expands into the rule that derives it (the winning case, for an enum),
+     so an exclusion explains in the user's own answers - "Service tier =
+     Tier 4" - not in the engine's intermediate vocabulary. Callers pass the
+     RESOLVED scenario (model.scenario), where derived values are current. */
+  function explain(rule, scenario, named, attrDefs, depth) {
+    const dep = depth || 0;
+    const defs = attrDefs || [];
+    const out = [];
+    because(rule, scenario, named, defs, undefined).forEach(l => {
+      const def = defs.find(a => a.id === l.attr);
+      if (def && def.derived && def.derive && dep < 3) {
+        let inner = def.derive.when;
+        if (def.derive.cases) {
+          const win = def.derive.cases.find(c => VSM.rules.evaluate(c.when, scenario, named));
+          inner = win ? win.when : null;
+        }
+        if (inner && inner !== true) { out.push.apply(out, explain(inner, scenario, named, defs, dep + 1)); return; }
+      }
+      out.push(l);
+    });
+    const seen = new Set();
+    return out.filter(l => (seen.has(l.attr) ? false : (seen.add(l.attr), true)));
+  }
+
+  VSM.derive = { compute, explain };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.derive;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

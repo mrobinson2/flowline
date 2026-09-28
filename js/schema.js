@@ -167,6 +167,15 @@
     { key: "why",        header: "Why It Exists", type: "text", optional: true, confirmed: false, aliases: ["WhyItExists", "Rationale", "Why"] }
   ];
 
+  /* The admin mode's version log, one row per applied change. */
+  const VERSIONS_SHEET = [
+    { key: "timestamp", header: "Timestamp", type: "text", required: true, confirmed: false, aliases: ["Time", "When", "Date"] },
+    { key: "author",    header: "Author",    type: "text", optional: true, confirmed: false, aliases: ["Changed By", "By"] },
+    { key: "target",    header: "Target",    type: "text", required: true, confirmed: false, aliases: ["Change", "What"] },
+    { key: "before",    header: "Before",    type: "text", optional: true, confirmed: false },
+    { key: "after",     header: "After",     type: "text", optional: true, confirmed: false }
+  ];
+
   /* Edges sheet, confirmed. Note the column order: SUCCESSOR first, then
      predecessor. Reading it the other way round reverses every dependency in
      the graph, which produces a schedule that looks plausible and is backwards.
@@ -280,7 +289,8 @@
     toggles:     { name: "Toggles",              aliases: ["Levers", "Scenario Toggles", "Switches", "Variables"], columns: TOGGLES },
     rules:       { name: "Rules",                aliases: ["Named Rules", "Rule Definitions"],        columns: RULES_SHEET },
     profiles:    { name: "Profiles",             aliases: ["Project Profiles", "Scenario Profiles"],  columns: null },
-    matrix:      { name: "Scenario Matrix",      aliases: ["Tailoring Matrix", "Matrix", "Applicability Matrix"], columns: null }
+    matrix:      { name: "Scenario Matrix",      aliases: ["Tailoring Matrix", "Matrix", "Applicability Matrix"], columns: null },
+    versions:    { name: "Versions",             aliases: ["Version Log", "Change Log"],               columns: VERSIONS_SHEET }
   };
 
   /* The workbook's day is eight hours. Not assumed: every Earliest Finish on
@@ -341,7 +351,7 @@
   }
 
   VSM.schema = {
-    TASK, EDGES, ASSUMPTIONS, TRACKING, TOGGLES, RULES: RULES_SHEET, PROFILE_FIXED, MATRIX_FIXED,
+    TASK, EDGES, ASSUMPTIONS, TRACKING, TOGGLES, RULES: RULES_SHEET, VERSIONS: VERSIONS_SHEET, PROFILE_FIXED, MATRIX_FIXED,
     SHEETS, PICKLISTS, HOURS_PER_DAY,
     norm, matchHeaders, matchValue, sheetByName, unconfirmed, parseCondition, parseCell
   };

@@ -551,7 +551,18 @@
 
     /* ---- scenario switches from the distinct "Applies When" phrases */
     const conditions = new Map();
+    /* A row whose Include Expression compiles never reads its phrase (the
+       phrase is display-only there), so the phrase must not mint a switch
+       either - otherwise every exported-then-reimported condition grows a
+       phantom "From Applies When" toggle. A cell that fails to compile falls
+       back to the phrase below, so it keeps its switch. */
+    const exprCompiles = r => {
+      const t = txt(r.includeExpression);
+      if (!t) return false;
+      try { VSM.expr.compile(t, toggles || undefined, sheetRuleIds); return true; } catch (e) { return false; }
+    };
     taskRows.forEach(r => {
+      if (exprCompiles(r)) return;
       const phrase = txt(r.appliesWhen);
       if (!phrase || ALWAYS.indexOf(phrase.toLowerCase()) >= 0) return;
       if (!conditions.has(phrase)) conditions.set(phrase, { id: condSlug(phrase), label: phrase, count: 0 });
@@ -644,6 +655,7 @@
         try {
           const c = VSM.expr.compile(exprText, toggles || undefined, sheetRuleIds);
           a.when = c.rule;
+          a.whenSource = "expression";
           usedExpression = true;
           (c.warnings || []).forEach(w => report.warnings.push(id + ": Include Expression: " + w));
         } catch (e) {
@@ -665,7 +677,7 @@
         if (!entry) {
           if (!usedExpression) {
             unmatchedInMatrix.push(id);
-            if (cond) a.when = cond.id;                     // fall back to the phrase for this row
+            if (cond) { a.when = cond.id; a.whenSource = "phrase"; }   // fall back to the phrase for this row
           }
         } else {
           if (usedExpression) {
@@ -673,6 +685,7 @@
           } else {
             const rule = entryToRule(entry);
             if (rule !== undefined) a.when = rule;
+            a.whenSource = "matrix";
             if (entry.require.length && entry.exclude.length) {
               matrixConflicts.push({
                 id, name: a.name,
@@ -688,7 +701,7 @@
             }));
           }
         }
-      } else if (cond && !usedExpression) a.when = cond.id;
+      } else if (cond && !usedExpression) { a.when = cond.id; a.whenSource = "phrase"; }
       if (category === "milestone") a.milestone = true;
       /* the workbook's own Handoff step type is an explicit declaration, which
          is narrower and more deliberate than our owner-change detection */
@@ -886,6 +899,17 @@
         ]
       };
       report.notes.push("No Toggles tab, so the scenario switches were built from the distinct Applies When phrases. Add Toggles, Profiles and Scenario Matrix tabs to tailor properly.");
+    }
+    /* The one-line rules minted from Applies When phrases are plumbing, not
+       authored logic: named so the export leaves them off the Rules sheet. */
+    const shims = Object.keys(scenario.rules).filter(id => namedRules[id] && !sheetRules[id]);
+    if (shims.length) scenario.phraseRules = shims;
+    /* the admin mode's version log, when the workbook carries one */
+    if (found.versions) {
+      const vr = readSheet(found.versions, S.VERSIONS, report, "Versions")
+        .filter(r => txt(r.target))
+        .map(r => ({ timestamp: txt(r.timestamp), author: txt(r.author), target: txt(r.target), before: txt(r.before), after: txt(r.after) }));
+      if (vr.length) scenario.versions = vr.slice(-100);
     }
     if (sheetRuleIds.length) {
       scenario.ruleMeta = ruleMeta;

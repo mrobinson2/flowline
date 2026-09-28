@@ -82,7 +82,9 @@
     const el = $("#data-source");
     if (st.mode === "linked") el.textContent = "Linked to folder \u201c" + st.label + "\u201d. Reload re-reads the files; Save writes back to them.";
     else if (st.mode === "needs-permission") el.textContent = "A linked folder is remembered but the browser needs permission again. Click Reload.";
-    else if (o) el.textContent = "Data " + (o.processSource === "edited" ? "edited in this browser" : "loaded from a file") + ", not the shipped files. Link a folder or download process.data.js to keep it.";
+    /* process.data.js alone does not carry rules or questions; say so when they differ */
+    else if (o) el.textContent = "Data " + (o.processSource === "edited" ? "edited in this browser" : "loaded from a file") + ", not the shipped files. "
+      + (o.scenario ? "Link the data folder and Save, or Export \u25be JSON, to keep it (the questions and rules differ too)." : "Link a folder or download process.data.js to keep it.");
     else el.textContent = "Using the shipped data files. Link the data folder to edit them and reload in place.";
     $("#btn-reset-data").hidden = !o;
     $("#btn-save-folder").hidden = st.mode !== "linked";
@@ -98,6 +100,8 @@
          They live outside state.scenario so a profile change never clears
          a decision somebody wrote a reason for. */
       overrides: {},
+      /* per-task include/exclude overrides: { id: true|false } (spec §4.6) */
+      taskOverrides: {},
       /* which wizard sections are open; 1 and 2 default open */
       sections: {},
       profile: null,
@@ -140,6 +144,9 @@
         if (saved.sections && typeof saved.sections === "object" && !Array.isArray(saved.sections)) {
           state.sections = Object.assign({}, saved.sections);
         }
+        if (saved.taskOverrides && typeof saved.taskOverrides === "object" && !Array.isArray(saved.taskOverrides)) {
+          state.taskOverrides = Object.assign({}, saved.taskOverrides);
+        }
         state.profile = saved.profile || null;
         state.view = saved.view || state.view;
         state.filters = Object.assign(state.filters, saved.filters || {});
@@ -169,21 +176,8 @@
 
   function saveState() { try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
 
-  /* Disabled controls (enabledWhen false) contribute a neutral value so rules
-     never see stale input. HIDDEN controls (shownWhen false, or diagnostic-
-     only) get the same treatment: their values stay in state - re-showing
-     restores them - but while hidden they must not fire rules the person can
-     no longer see the cause of (spec §4.5). */
-  function effectiveScenario() {
-    const s = Object.assign({}, state.scenario);
-    const neutralize = a => { s[a.id] = a.disabledValue !== undefined ? a.disabledValue : (a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id]); };
-    data.scenario.attributes.forEach(a => {
-      if (!VSM.rules.isEnabled(a, state.scenario, namedRules())) { neutralize(a); return; }
-      if (a.diagnosticOnly) { neutralize(a); return; }
-      if (a.shownWhen !== undefined && !a.derived && !VSM.rules.evaluate(a.shownWhen, state.scenario, namedRules())) neutralize(a);
-    });
-    return s;
-  }
+  /* what the engine sees: disabled and hidden answers neutralized (rules.js) */
+  function effectiveScenario() { return VSM.rules.effective(data.scenario.attributes, state.scenario, namedRules()); }
   function scenarioSummary() {
     const s = effectiveScenario(), parts = [];
     data.scenario.attributes.forEach(a => {
@@ -243,7 +237,8 @@
        leave a blank page with no way back, so report it like any other data
        error and keep the last good chart on screen. */
     try {
-      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes, state.overrides);
+      model = VSM.schedule.build(data.process, data.taxonomy, effectiveScenario(), namedRules(), data.scenario.attributes,
+        { derived: state.overrides, tasks: state.taskOverrides });
     } catch (e) {
       lastIssues = { errors: issues.errors.concat("the schedule could not be built: " + e.message), warnings: issues.warnings };
       renderIssues(lastIssues);
@@ -259,6 +254,10 @@
     renderMetrics();
     renderWasteChips();
     renderDerived();
+    renderSummary();
+    renderRuns();
+    renderBanner();
+    if (!$("#why-drawer").hidden) renderDrawer();
     renderChart();
     if (document.body.classList.contains("presenting")) renderPresentation();
     if (selectedId) showDetails(selectedId);
@@ -385,6 +384,7 @@
         const because = (p.because || []).slice(0, 4);
         if (because.length) chip.appendChild(h("div", { class: "dc-why" },
           "Because: " + because.map(b => (b.satisfied === false ? "not: " : "") + b.label + " = " + b.valueLabel).join("  ·  ")));
+        else chip.appendChild(h("div", { class: "dc-why" }, "No rule matched; using the default."));
       }
       const actions = h("div", { class: "dc-actions" });
       actions.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => overrideDialog(attr, p.value, ov) }, ov ? "Change" : "Override"));
@@ -432,6 +432,208 @@
         } }, "Apply override"))));
     document.body.appendChild(overlay);
     paint();
+  }
+
+  /* ------------------------------------------------------------ result summary
+     and the "why" drawer (spec §4.6). The drawer's Excluded tab is the point:
+     reviewers challenge absences more than presences, and every row cites the
+     specific answers that decided it. */
+  function renderSummary() {
+    const box = $("#result-summary");
+    if (!box || !model) return;
+    const total = (data.process.activities || []).length;
+    const U = units();
+    box.innerHTML = "";
+    box.hidden = false;
+    box.appendChild(h("div", { class: "control-group" }, "Result"));
+    box.appendChild(h("div", { class: "summary-line" },
+      model.nodes.length + " of " + total + " tasks included · " + model.metrics.gates + " gates · " +
+      fmt(model.metrics.currentElapsed) + " " + U.abbr));
+    box.appendChild(h("button", { type: "button", class: "ghost", onclick: () => openDrawer("included") }, "Why these tasks?"));
+  }
+
+  let drawerTab = "included";
+  function openDrawer(tab) { drawerTab = tab || drawerTab; $("#why-drawer").hidden = false; renderDrawer(); }
+  function closeDrawer() { $("#why-drawer").hidden = true; }
+
+  function explainLeaves(when) {
+    try { return VSM.derive.explain(when, model.scenario, namedRules(), data.scenario.attributes) || []; }
+    catch (e) { return []; }
+  }
+  function whyText(when, wantSatisfied) {
+    if (when === undefined) return "Always included";
+    const ls = explainLeaves(when).filter(l => (wantSatisfied ? l.satisfied : !l.satisfied));
+    if (!ls.length) return VSM.rules.describe(when, data.scenario.attributes, namedRules());
+    return ls.slice(0, 4).map(l => l.label + " = " + l.valueLabel).join("  ·  ");
+  }
+  /* group rows Stage -> Phase, mirroring the chart bands */
+  function grouped(rows) {
+    const phases = data.process.phases || [];
+    const stages = data.process.stages || [];
+    const phaseOf = id => phases.find(p => p.id === id);
+    const out = new Map();
+    rows.forEach(r => {
+      const ph = phaseOf(r.phase);
+      const st = ph && ph.stage ? (stages.find(s => s.id === ph.stage) || {}).label : null;
+      const key = (st ? st + " · " : "") + (ph ? ph.label : "No phase");
+      if (!out.has(key)) out.set(key, []);
+      out.get(key).push(r);
+    });
+    return out;
+  }
+  function drawerRow(r, included) {
+    const a = model.nodeById.has(r.id) ? model.nodeById.get(r.id).act : (data.process.activities || []).find(x => x.id === r.id);
+    const ov = state.taskOverrides[r.id];
+    const row = h("details", { class: "why-row" + (ov !== undefined ? " overridden" : "") });
+    row.appendChild(h("summary", null,
+      h("span", { class: "wr-name" }, r.name || r.id),
+      ov !== undefined ? h("em", { class: "dc-badge" }, ov ? "forced in" : "forced out") : null));
+    const body = h("div", { class: "wr-body" });
+    const team = a && a.owner && data.process.teams && data.process.teams[a.owner];
+    if (team) body.appendChild(h("div", null, "Owner: " + team.label));
+    if (a && a.triggerExplanation) body.appendChild(h("div", null, a.triggerExplanation));
+    body.appendChild(h("div", { class: "dc-why" },
+      (included ? "Included: " : "Excluded because: ") + whyText(r.when, included)));
+    const allow = a && (a.canOverride || "yes");
+    if (a) {
+      if (ov !== undefined) {
+        body.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => { delete state.taskOverrides[r.id]; rebuild(); } }, "Clear override"));
+      } else if (included && allow === "governed") {
+        body.appendChild(h("div", { class: "hint" }, "Governed gate - it cannot be switched off."));
+      } else {
+        body.appendChild(h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+          state.taskOverrides[r.id] = !included; saveState(); rebuild();
+        } }, included ? "Exclude anyway" : "Include anyway"));
+      }
+    }
+    row.appendChild(body);
+    return row;
+  }
+  function renderDrawer() {
+    const box = $("#why-drawer");
+    if (!box || !model) return;
+    box.innerHTML = "";
+    const included = model.nodes.map(n => ({ id: n.id, name: n.name, phase: n.act.phase, when: n.act.when }));
+    const excluded = model.excluded || [];
+    box.appendChild(h("div", { class: "drawer-head" },
+      h("button", { type: "button", class: (drawerTab === "included" ? "on" : ""), onclick: () => { drawerTab = "included"; renderDrawer(); } }, "Included (" + included.length + ")"),
+      h("button", { type: "button", class: (drawerTab === "excluded" ? "on" : ""), onclick: () => { drawerTab = "excluded"; renderDrawer(); } }, "Excluded (" + excluded.length + ")"),
+      h("button", { class: "icon", type: "button", title: "Close", onclick: closeDrawer }, "×")));
+    const rows = drawerTab === "included" ? included : excluded;
+    const body = h("div", { class: "drawer-body" });
+    grouped(rows).forEach((list, key) => {
+      body.appendChild(h("div", { class: "control-group" }, key));
+      list.forEach(r => body.appendChild(drawerRow(r, drawerTab === "included")));
+    });
+    if (!rows.length) body.appendChild(h("p", { class: "hint" }, "Nothing here under the current scenario."));
+    box.appendChild(body);
+  }
+
+  /* ------------------------------------------------------------ saved runs
+     (spec §2.5 / §4.9): save the current scenario under a name, reload it -
+     the engine rebuilds and the run asserts what it produced - and compare
+     two, which is the "what does SaaS over COTS actually save" question. */
+  function renderRuns() {
+    const box = $("#saved-runs");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(h("div", { class: "control-group" }, "Saved scenarios"));
+    const name = h("input", { class: "input", placeholder: "Name this scenario…" });
+    const saveBtn = h("button", { type: "button", class: "ghost dc-btn", onclick: () => {
+      if (!model) return;
+      const run = VSM.runs.record(model, state, name.value.trim() || "unnamed scenario");
+      try { VSM.runs.save(run); } catch (e) { toast("Not saved: " + e.message, true); return; }
+      name.value = "";
+      renderRuns();
+      toast("Saved \u201c" + run.name + "\u201d (" + run.totals.tasks + " tasks, " + fmt(run.totals.elapsed) + " " + units().abbr + ")");
+    } }, "Save");
+    box.appendChild(h("div", { class: "run-save" }, name, saveBtn));
+    VSM.runs.list().slice().reverse().forEach(r => {
+      const row = h("div", { class: "run-row" },
+        h("span", { class: "run-name", title: r.createdUtc }, r.name),
+        h("em", null, r.totals.tasks + " · " + fmt(r.totals.elapsed) + units().abbr),
+        h("button", { type: "button", class: "ghost dc-btn", onclick: () => loadRun(r) }, "Load"),
+        h("button", { type: "button", class: "ghost dc-btn", onclick: () => compareRun(r) }, "Compare"),
+        h("button", { type: "button", class: "icon", title: "Delete", onclick: () => {
+          try { VSM.runs.remove(r.runId); } catch (e) { toast(e.message, true); return; }
+          renderRuns();
+        } }, "\u00d7"));
+      box.appendChild(row);
+    });
+  }
+  function loadRun(r) {
+    state.scenario = mergeScenario(data.scenario.attributes, r.answers);
+    state.overrides = Object.assign({}, r.overrides);
+    state.taskOverrides = Object.assign({}, r.taskOverrides);
+    state.profile = null;
+    saveState();
+    buildScenarioControls();
+    rebuild();
+    toast("Loaded \u201c" + r.name + "\u201d");
+  }
+  function compareRun(r) {
+    if (!model || !document.body) return;
+    const now = VSM.runs.record(model, state, "current scenario");
+    const df = VSM.runs.diff(r, now);
+    const overlay = h("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
+    const done = () => overlay.remove();
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(); });
+    const body = h("div", { class: "overlay-body" });
+    const U = units();
+    body.appendChild(h("p", null, "\u201c" + r.name + "\u201d \u2192 current: " +
+      (df.elapsedDelta >= 0 ? "+" : "") + fmt(df.elapsedDelta) + " " + U.abbr + " elapsed, " +
+      (df.gatesDelta >= 0 ? "+" : "") + df.gatesDelta + " gates."));
+    const nameOf = id => { const x = (data.process.activities || []).find(q => q.id === id); return x ? x.name : id; };
+    const listBlock = (title, ids) => {
+      if (!ids.length) return;
+      body.appendChild(h("p", { class: "warn-head" }, title + " (" + ids.length + ")"));
+      const ul = h("ul");
+      ids.slice(0, 12).forEach(id => ul.appendChild(h("li", null, nameOf(id))));
+      if (ids.length > 12) ul.appendChild(h("li", null, "\u2026 and " + (ids.length - 12) + " more"));
+      body.appendChild(ul);
+    };
+    listBlock("Only in the current scenario", df.addedTasks);
+    listBlock("Only in \u201c" + r.name + "\u201d", df.removedTasks);
+    if (df.changedAnswers.length) {
+      body.appendChild(h("p", { class: "warn-head" }, "Changed answers"));
+      const ul = h("ul");
+      df.changedAnswers.slice(0, 12).forEach(c => ul.appendChild(h("li", null, c.id + ": " + JSON.stringify(c.from) + " \u2192 " + JSON.stringify(c.to))));
+      body.appendChild(ul);
+    }
+    overlay.appendChild(h("div", { class: "overlay-box" },
+      h("div", { class: "overlay-head" }, h("h2", null, "Compare scenarios"),
+        h("button", { class: "icon", type: "button", onclick: done }, "\u00d7")),
+      body,
+      h("div", { class: "overlay-foot" }, h("button", { class: "primary", type: "button", onclick: done }, "Close"))));
+    document.body.appendChild(overlay);
+  }
+
+  /* ------------------------------------------------------------ assumptions
+     banner (spec §4.6 addition 3): shown only when something needs attention,
+     dismissible until the item set changes. */
+  let bannerDismissed = "";
+  function renderBanner() {
+    const box = $("#assumptions");
+    if (!box || !model) return;
+    const items = [];
+    const noEst = model.nodes.filter(n => n.act.noEstimate);
+    if (noEst.length) items.push(noEst.length + " task(s) have no time estimate (" +
+      noEst.slice(0, 3).map(n => n.name).join(", ") + (noEst.length > 3 ? ", …" : "") + ") - the schedule understates any scenario including them.");
+    const ovd = model.derived && model.derived.overridden;
+    if (ovd) Object.keys(ovd).forEach(id => {
+      if (ovd[id].ignored) return;
+      const a = data.scenario.attributes.find(x => x.id === id);
+      items.push("Derived value overridden: " + (a ? a.label : id) + (ovd[id].reason ? " - “" + ovd[id].reason + "”" : ""));
+    });
+    const tov = Object.keys(state.taskOverrides || {});
+    if (tov.length) items.push(tov.length + " task override(s) in force: " + tov.slice(0, 4).join(", ") + (tov.length > 4 ? ", …" : ""));
+    if (state.scenario.serviceTier === "tbd") items.push("Service tier is not yet determined - the tier-driven controls are provisional.");
+    const hash = JSON.stringify(items);
+    if (!items.length || hash === bannerDismissed) { box.hidden = true; return; }
+    box.innerHTML = "";
+    box.hidden = false;
+    items.forEach(i => box.appendChild(h("div", { class: "banner-item" }, i)));
+    box.appendChild(h("button", { class: "icon", type: "button", title: "Dismiss", onclick: () => { bannerDismissed = hash; box.hidden = true; } }, "×"));
   }
 
   /* Scheduler notes are merged with whatever validation reported for this data. */
@@ -942,6 +1144,19 @@
     $("#btn-reset-data").hidden = false;
   }
 
+  /* Admin mode edits the rule layer: the process (activity conditions) and the
+     scenario (variables, named rules, the version log) move together. Same
+     pinning and read-back as a process edit. */
+  function saveRulesOverride(candidate) {
+    const override = pinLiveData(readOverride());
+    const issues = VSM.validate.run(candidate.process, override.taxonomy || VSM.data.taxonomy, candidate.scenario);
+    if (issues.errors.length) throw new Error(issues.errors[0]);
+    override.process = candidate.process;
+    override.scenario = candidate.scenario;
+    override.processSource = "edited";
+    describeSource(writeOverride(override));
+  }
+
   /* ------------------------------------------------------------ export + data loading */
   function slug(s) { return String(s || "value-stream").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""); }
   function exportTarget() {
@@ -1008,7 +1223,7 @@
       else if (kind === "png2x") { await VSM.exporter.exportPNG(exportTarget(), name + "-3840x2160.png", 2); toast("PNG exported (3840×2160)"); }
       else if (kind === "svg") { VSM.exporter.exportSVG(exportTarget(), name + ".svg"); toast("SVG exported"); }
       else if (kind === "copy") { await VSM.exporter.copyPNG(exportTarget(), 2); toast("Copied to clipboard as PNG"); }
-      else if (kind === "json") { VSM.exporter.exportJSON({ process: data.process, taxonomy: data.taxonomy, scenario: data.scenario }, slug(data.process.title) + ".json"); toast("JSON exported"); }
+      else if (kind === "json") { VSM.exporter.exportJSON({ process: data.process, taxonomy: data.taxonomy, scenario: data.scenario, runs: VSM.runs.list() }, slug(data.process.title) + ".json"); toast("JSON exported (saved scenarios included)"); }
       else if (kind === "xlsx") { VSM.exportWorkbook.exportXLSX(model, exportOpts(), slug(data.process.title) + "-value-stream.xlsx"); toast("Excel workbook exported in the Task List format"); }
       else if (kind === "csv") { VSM.exportWorkbook.exportCSV(model, exportOpts(), slug(data.process.title) + "-task-list.csv"); toast("CSV exported in the Task List format"); }
       else if (kind === "simple") { VSM.table.exportXLSX(data.process, slug(data.process.title) + "-activities.xlsx"); toast("Editable workbook exported — change it in Excel and Import it straight back"); }
@@ -1170,6 +1385,10 @@
       try {
         const obj = JSON.parse(reader.result);
         const override = pinLiveData(readOverride());
+        if (Array.isArray(obj.runs)) {
+          try { VSM.runs.replaceAll(obj.runs); } catch (e2) { toast("Saved scenarios not restored: " + e2.message, true); }
+          delete obj.runs;
+        }
         if (obj.process || obj.taxonomy || obj.scenario) Object.assign(override, obj);
         else if (obj.activities) override.process = obj;
         else if (obj.families) override.taxonomy = obj;
@@ -1335,6 +1554,32 @@
         toast("Process structure updated");
       }
     });
+    $("#btn-admin").onclick = () => {
+      /* what is on screen rides along as a pseudo-run, so the preview answers
+         "what happens to THIS" as well as every saved scenario */
+      const current = model ? [{
+        runId: "current", name: "Current scenario",
+        /* copies, as runs.record takes: the preview must never alias live state */
+        answers: VSM.deepClone(state.scenario), overrides: VSM.deepClone(state.overrides), taskOverrides: VSM.deepClone(state.taskOverrides),
+        includedKeys: model.nodes.map(n => n.id)
+      }] : [];
+      VSM.adminUI.open(data, {
+        runs: current.concat(VSM.runs.list()),
+        onApply: (candidate, changes) => {
+          try { saveRulesOverride(candidate); }
+          catch (e) { toast("Not applied: " + e.message, true); return false; }
+          data.process = candidate.process;
+          data.scenario = candidate.scenario;
+          /* a retired variable leaves the answers; an added one gets its default */
+          state.scenario = mergeScenario(data.scenario.attributes, state.scenario);
+          Object.keys(state.overrides).forEach(id => { if (!data.scenario.attributes.some(a => a.id === id)) delete state.overrides[id]; });
+          buildScenarioControls();
+          buildOwnerFilter();
+          rebuild();
+          toast(changes.length + " rule change" + (changes.length === 1 ? "" : "s") + " applied and logged");
+        }
+      });
+    };
     let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderChart, 120); });
     bindTooltip();
   }

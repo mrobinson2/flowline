@@ -28,7 +28,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.3.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.3.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.4.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.4.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 
@@ -73,6 +73,8 @@ The timeline views join in once tracking is in use: done rows step back with a g
 ## Editing the structure in the app
 
 **Open process designer** (in the sidebar) edits what used to need a text editor: add, rename, reorder and delete stages and phases, assign phases to stages, move activities between phases, reorder rows, and sort every row into band order in one click. Changes happen on a working copy and apply only when the whole result validates — the same last-good-data contract as imports, so a half-finished edit can never blank the projector. Deleting a phase that still has activities moves them to the first remaining phase and says so.
+
+**Open admin mode** (beside it) edits which tasks fire, and when — without touching code or the spreadsheet. Named rules and each activity's inclusion condition are edited as expression text (`R_drRequired AND R_cloud`) with live compile feedback: the column of the mistake, a did-you-mean, completion of variable and rule names. Variables can be added, reordered and retired; retiring is blocked while anything still reads the variable, and the blockers are listed. Edits are staged, and the only way to apply them is through the **impact preview**: every saved scenario, plus what is on screen, is replayed against the live rules and the edited ones, and the table shows which tasks each one gains or loses. Applying asks who is making the change; each change passes the same validation gate as an import and is appended to a version log (author, time, before and after; last 100). Edits survive a round trip through the workbook as well as the JSON export: the Excel export writes the live Rules sheet, the Toggles sheet with sections and visibility, each edited task's Include Expression (which takes precedence over its Scenario Matrix row on re-import), and a Versions sheet.
 
 ## Presentation mode
 
@@ -163,6 +165,8 @@ Conditions are declarative and can be named once and reused:
 
 Some answers the engine works out for itself. You describe the workload — what data it holds, its service tier, whether an approved pattern fits — and **derived values** (the architecture route, whether a privacy review or DR is required) are computed and shown as chips that cite the specific answers behind them: *Because: Service tier = Tier 3, Pattern conforms = Yes*. A derived value can be overridden, and an override is sticky — it wins over the derivation until it is cleared — and carries a recorded reason where the data demands one. Nobody is asked "do you need a privacy review?"; they say what data is involved, and the review follows.
 
+Every included and excluded task can say why. The sidebar's result summary opens a drawer with an Included and an **Excluded** tab — the one reviewers actually argue with — each row citing the answers that decided it. Rows the register marks overridable can be forced in or out (recorded, badged, and surfaced on an assumptions banner); a governed gate refuses to be switched off.
+
 Toggles do not only add and remove steps, they change how long a step takes. A Scenario Matrix cell holding a number both requires the task and multiplies its duration, because an architecture review for a catalog pattern is not the review a greenfield build gets.
 
 Where one toggle requires a step and another excludes it, required wins and the collision is reported by name. A governance tool that can silently drop a control because two toggles disagreed will eventually embarrass somebody.
@@ -225,7 +229,7 @@ js/               the engine (see below)   test/       run-tests.js, regressions
 tools/bundle.js   builds dist/             fixture/    a synthetic source workbook
 ```
 
-Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `progress` computing the tracking rollups over a scheduled model, `progress-render` drawing the Tracker view, `designer` editing stages, phases and row order, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
+Inside `js/`, dependencies run one way: `registry` → `rules` → `schedule` → `layout` → `render` → `app`, with `schema` and `validate` describing the data, `progress` computing the tracking rollups over a scheduled model, `progress-render` drawing the Tracker view, `designer` editing stages, phases and row order, `admin` and `admin-ui` editing the rule layer behind an impact preview, `runs` keeping saved scenarios, `table` and `import` reading workbooks, `files` handling the linked folder, `embed` mounting the chart elsewhere, and `node.js` loading everything without a DOM.
 
 `js/schema.js` is the file to edit when a column name changes: it declares every column, its aliases and its picklist, and the importer, validator and exporter all read from it.
 

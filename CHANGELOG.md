@@ -1,3 +1,50 @@
+# Flowline 1.4.0
+
+Prepared 27 September 2026 from 1.3.0. The last three phases of the specification gap-closure program (plans in `docs/superpowers/plans/`): the tool now explains every absence as well as every presence, keeps the scenarios worth keeping, and lets a platform architect change which tasks fire without touching code or the spreadsheet — seeing the effect on those saved scenarios before anything is applied. Every change landed test-first, the branch had a whole-diff review before merge, and the shipped sample's default map is unchanged: 39 activities, 198 days.
+
+## Added
+
+### Explainability (Phase 4)
+
+1. **Every included and every excluded task says why.** A result summary under the sidebar (`39 of 69 tasks included · 9 gates · 198 d`) opens a slide-over drawer with **Included** and **Excluded** tabs grouped by stage and phase. Each row cites the specific answers that decided it — *Service tier = Tier 4*, not *drRequired = false*: a derived attribute in a rule expands into the answers that derive it. The Excluded tab is the point; reviewers challenge absences far more often than presences.
+
+2. **Per-task overrides where the register allows them.** A row can be forced in or out from the drawer and is badged while overridden. The specification's `Can Override` is Yes or Governed: Governed gates (the sample marks the security attestation and CAB) can be added but never removed, and the drawer says so rather than hiding the control. A forced-in task whose predecessors are excluded arrives with bridged links, not as an orphan.
+
+3. **An assumptions banner** under the KPI strip lists what the numbers rest on: tasks with no time estimate, overrides in force with their reasons, and an undecided service tier. A derived value that fell back to its default now says "No rule matched; using the default" instead of staying silent.
+
+### Saved scenarios (Phase 5)
+
+4. **Save, reload and compare scenarios** (`js/runs.js`). A run snapshots the answers, both override maps, the derived values and the result; reloading rebuilds from the answers and a test holds the result identical. Compare answers "what does SaaS over COTS actually save?" in tasks added and removed, days and gates. Runs travel with the JSON export, are capped at 20, and every save is read back — storage that accepts a write and keeps nothing fails the save rather than reporting success.
+
+### Admin mode (Phase 6)
+
+5. **Edit the rule layer in the app, behind a mandatory impact preview** (`js/admin.js`, `js/admin-ui.js`). Beside the process designer: **Variables** (add with section and group, reorder, retire — blocked while anything still reads the variable, with every blocker listed), **Rules** and **Activities** (named rules and inclusion conditions as expression text, recompiled on every keystroke with the column, a caret, a did-you-mean and name completion; a shape the grammar cannot say is edited as JSON rather than misrepresented), and **History**. Edits are staged; the only Apply is on the impact preview, which replays every saved scenario and the on-screen one against the live rules and against the edited ones and lists the tasks each gains or loses. A saved scenario whose recording already differs because of an earlier change is marked *saved under older rules*, so an old change is never blamed on the edit under review. A candidate that compiles but does not validate (a rule that refers to itself) never reaches the preview, and the live data is untouched.
+
+6. **A version log that names who applied each change** — `{ timestamp, author, target, before, after }`, last 100, carried by the JSON export and by a Versions sheet in the workbook.
+
+7. **Admin edits survive the workbook round trip.** The Excel export wrote the rule layer from the workbook it was imported from, so an in-app edit vanished on export and re-import. It now writes the live state: Task List columns AA–AF (an edited condition goes in `Include Expression`, which wins over its Scenario Matrix row while the row keeps supplying duration multipliers; `Can Override`, `Trigger Explanation` and the other rule columns were dropped on export before and are written now), the Rules sheet from the live rules, Toggles with section, group, Shown When and derivation, and the matrix without retired variables' columns. `Enabled When` gates and derived choices with ordered cases have no workbook column; Export Notes says so, and the JSON export keeps both.
+
+## Fixed
+
+8. **The importer no longer mints a phantom switch** from the Applies When phrase of a row whose Include Expression compiles — the phrase is display-only there. Exporting the shipped sample and re-importing it used to add 27 "From Applies When" toggles.
+
+9. **Hidden and disabled answers are neutralized in one place** (`rules.effective`), shared by the chart and the impact replay, so a preview can never report a change the chart would not show.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     80 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (571 KB)
+```
+
+Browser-verified in Chrome against the shipped sample: the drawer's Excluded tab explains DR under Tier 4 in terms of the tier; a Governed gate refuses exclusion; two saved scenarios reload identically and compare; in admin mode, changing `drRequired` to `FALSE` previews three DR tasks removed on the baseline and on-screen scenarios and none on a Tier 4 scenario, applies, drops the DR chain from the chart, and survives a reload with its log entry; retiring `serviceTier` is refused with its six referrers listed; a misspelt variable shows its column and did-you-mean and cannot be staged; Apply stays disabled until a name is given; an edited condition and the log survive the real .xlsx writer and reader.
+
+---
+
 # Flowline 1.3.0
 
 Prepared 26 September 2026 from 1.2.0. The heart of the specification gap-closure program (plans in `docs/superpowers/plans/`): the workbook gains a real rule language, the engine starts deciding what the user should not be asked, and the sidebar becomes a six-section interview. Every change landed test-first; the branch had a whole-diff review before merge; and the shipped sample's default map was asserted row-for-row identical — 39 activities, 198 days — across two vocabulary rewrites, so nothing anyone bookmarked moved.

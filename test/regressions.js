@@ -1175,5 +1175,285 @@ function form(extra = {}) {
     assert.equal(shown.costOver1k, true, "re-showing restores the retained value");
   });
 
+  await test("1.4.0: the model carries its exclusions and explain() cites real answers", () => {
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = sc => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes);
+    /* RF#1: included + excluded partition the register, three scenarios */
+    [ {}, { serviceTier: "Tier 4" }, { hosting: "on-prem", network: ["inbound-internet"] } ].forEach(sc => {
+      const m = build2(sc);
+      assert.equal(m.nodes.length + m.excluded.length, d.process.activities.length, JSON.stringify(sc));
+      const inc = new Set(m.nodes.map(n => n.id));
+      assert.ok(m.excluded.every(x => !inc.has(x.id)), "partitions overlap");
+    });
+    /* an excluded row knows its phase, stage and rule */
+    const t4 = build2({ serviceTier: "Tier 4" });
+    const dr = t4.excluded.find(x => x.id === "dr-design");
+    assert.ok(dr, "dr-design should be excluded at Tier 4");
+    assert.equal(dr.phase, "design");
+    assert.equal(dr.stage, "deliver");
+    assert.ok(dr.when !== undefined);
+    /* RF#5: explain expands a named-rule reference into real answers */
+    const leaves = V.derive.explain(dr.when, t4.scenario, d.scenario.rules, d.scenario.attributes);
+    const tier = leaves.find(l => l.attr === "serviceTier");
+    assert.ok(tier && tier.satisfied === false && tier.valueLabel === "Tier 4", JSON.stringify(leaves));
+  });
+
+  await test("1.4.0: per-task overrides apply where allowed; Governed gates refuse exclusion", () => {
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const build2 = (sc, ov) => V.schedule.build(d.process, d.taxonomy,
+      Object.assign(V.rules.defaults(d.scenario.attributes), sc || {}), d.scenario.rules, d.scenario.attributes, ov);
+    /* the sample now uses the Phase 1 field: DR trio overridable, the
+       security attestation and CAB governed */
+    const byId = Object.fromEntries(d.process.activities.map(a => [a.id, a]));
+    assert.equal(byId["dr-design"].canOverride, "yes");
+    assert.equal(byId["cab"].canOverride, "governed");
+    /* exclude an overridable task */
+    const noDr = build2({}, { tasks: { "dr-design": false } });
+    assert.ok(!noDr.nodes.some(n => n.id === "dr-design"));
+    assert.ok(noDr.taskOverrides && noDr.taskOverrides["dr-design"] === false);
+    /* RF#2: a governed gate cannot be switched off */
+    const keepCab = build2({}, { tasks: { "cab": false } });
+    assert.ok(keepCab.nodes.some(n => n.id === "cab"), "cab must survive");
+    assert.ok(keepCab.warnings.some(w => /cab/.test(w) && /governed/i.test(w)), JSON.stringify(keepCab.warnings));
+    /* RF#4: forcing a task IN when its rule said no - preds resolve, no orphan */
+    const forced = build2({}, { tasks: { "vendor-risk": true } });
+    const vr = forced.nodes.find(n => n.id === "vendor-risk");
+    assert.ok(vr, "vendor-risk forced in");
+    assert.ok(vr.preds.length > 0 && vr.preds.every(pr => forced.nodeById.has(pr)), "preds must resolve");
+    /* an unknown id warns rather than silently vanishing */
+    const ghost = build2({}, { tasks: { "no-such-task": false } });
+    assert.ok(ghost.warnings.some(w => /no-such-task/.test(w)), JSON.stringify(ghost.warnings));
+    /* RF#3: the legacy flat 6th-arg shape still means derived overrides */
+    const legacy = build2({}, { architectureLane: { value: "custom", reason: "board" } });
+    assert.equal(legacy.derived.provenance.architectureLane.value, "custom");
+    assert.ok(legacy.nodes.some(n => n.id === "arb"));
+  });
+
+  await test("1.4.0: scenario runs record, reload identically, diff, and refuse lying storage", () => {
+    /* Node has no localStorage; the module takes the global when present */
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+    try {
+      const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+      const answers = V.rules.defaults(d.scenario.attributes);
+      const build2 = (sc, ov) => V.schedule.build(d.process, d.taxonomy, Object.assign({}, answers, sc || {}), d.scenario.rules, d.scenario.attributes, ov);
+      const m1 = build2({}, { derived: { architectureLane: { value: "custom", reason: "board" } }, tasks: {} });
+      const run = V.runs.record(m1, { scenario: answers, overrides: { architectureLane: { value: "custom", reason: "board" } }, taskOverrides: {} }, "baseline custom");
+      assert.equal(run.name, "baseline custom");
+      assert.equal(run.totals.tasks, m1.nodes.length);
+      V.runs.save(run);
+      assert.equal(V.runs.list().length, 1);
+      /* RF#1: reload = rebuild from the run's answers + overrides -> identical */
+      const saved = V.runs.list()[0];
+      const m2 = build2(saved.answers, { derived: saved.overrides, tasks: saved.taskOverrides });
+      assert.equal(JSON.stringify(m2.nodes.map(n => n.id).sort()), JSON.stringify(saved.includedKeys.slice().sort()));
+      assert.equal(m2.metrics.currentElapsed, saved.totals.elapsed);
+      /* RF#2: diff two profiles */
+      const saas = d.scenario.presets.find(p2 => p2.id === "adopt-saas").set;
+      const cots = d.scenario.presets.find(p2 => p2.id === "deploy-cots").set;
+      const ra = V.runs.record(build2(saas), { scenario: Object.assign({}, answers, saas), overrides: {}, taskOverrides: {} }, "saas");
+      const rb = V.runs.record(build2(cots), { scenario: Object.assign({}, answers, cots), overrides: {}, taskOverrides: {} }, "cots");
+      const df = V.runs.diff(ra, rb);
+      assert.ok(df.addedTasks.length + df.removedTasks.length > 0, "profiles must differ");
+      assert.ok(typeof df.elapsedDelta === "number");
+      assert.ok(df.changedAnswers.some(c => c.id === "workType" && c.from === "saas" && c.to === "cots"), JSON.stringify(df.changedAnswers));
+      /* the ring caps at 20 */
+      for (let i = 0; i < 25; i++) V.runs.save(V.runs.record(m1, { scenario: answers, overrides: {}, taskOverrides: {} }, "r" + i));
+      assert.equal(V.runs.list().length, 20);
+      /* RF#3: storage that accepts and drops the write must throw */
+      global.localStorage.setItem = () => {};
+      store.clear();
+      assert.throws(() => V.runs.save(run), /keep|stor/i);
+    } finally { delete global.localStorage; }
+  });
+
+  await test("1.4.0: admin core - references found everywhere, impact replays the run's answers", () => {
+    /* RF#1: one reference of each kind */
+    const syn = {
+      process: { units: "hours", activities: [
+        task("a", { when: { tier: "t0" } }),
+        task("b", { predecessors: ["a"] })
+      ] },
+      taxonomy: clone(shipped.taxonomy),
+      scenario: {
+        attributes: [
+          { id: "tier", label: "Tier", type: "enum", default: "t0", options: [{ value: "t0" }, { value: "t1" }], section: 4 },
+          { id: "gated", label: "Gated", type: "boolean", default: false, shownWhen: { tier: "t0" }, section: 4 },
+          { id: "locked", label: "Locked", type: "boolean", default: false, enabledWhen: { tier: "t0" }, section: 4 },
+          { id: "dr", label: "DR", type: "boolean", default: false, derived: true, derive: { when: { tier: "t0" } }, section: 4 }
+        ],
+        rules: { topTier: { tier: "t0" } },
+        presets: [{ id: "p1", label: "P1", partial: true, set: { tier: "t1" } }]
+      }
+    };
+    const refs = V.admin.referencesTo(syn, "tier");
+    const kinds = refs.map(r => r.kind).sort();
+    ["activity", "derive", "enabledWhen", "preset", "rule", "shownWhen"].forEach(k =>
+      assert.ok(kinds.includes(k), "missing reference kind " + k + " in " + JSON.stringify(kinds)));
+    assert.equal(V.admin.referencesTo(syn, "nothing-uses-this").length, 0);
+
+    /* RF#2: impact uses each run's own answers */
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+    try {
+      const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+      const answers = V.rules.defaults(d.scenario.attributes);
+      const mk = sc => {
+        const m = V.schedule.build(d.process, d.taxonomy, Object.assign({}, answers, sc), d.scenario.rules, d.scenario.attributes);
+        return V.runs.record(m, { scenario: Object.assign({}, answers, sc), overrides: {}, taskOverrides: {} }, JSON.stringify(sc));
+      };
+      const baseline = mk({});                       // DR present (Tier 3)
+      const tier4 = mk({ serviceTier: "Tier 4" });   // DR already absent
+      const candidate = clone(d);
+      candidate.scenario.rules.drRequired = false;   // the rule change under preview
+      const rows = V.admin.impact(d, candidate, [baseline, tier4]);
+      const rb = rows.find(r => r.runId === baseline.runId);
+      const r4 = rows.find(r => r.runId === tier4.runId);
+      assert.ok(rb.removed.length >= 3 && rb.removed.every(id => /^dr-/.test(id) || id === "dr-test"), JSON.stringify(rb.removed));
+      assert.equal(rb.added.length, 0);
+      assert.equal(r4.removed.length + r4.added.length, 0, "a Tier 4 run must be untouched: " + JSON.stringify(r4));
+      assert.ok(!rb.stale && !r4.stale);
+      /* a foreign run with no answers diffs rather than throws */
+      assert.equal(V.runs.diff({ includedKeys: [], totals: {} }, { includedKeys: [], totals: {}, answers: { x: 1 } }).changedAnswers.length, 1);
+      /* a run that no longer replays under the live data is flagged stale */
+      const brokenLive = clone(d); brokenLive.process.activities[0].predecessors = [brokenLive.process.activities[1].id, brokenLive.process.activities[0].id];
+      const [rs] = V.admin.impact(brokenLive, d, [baseline]);
+      assert.ok(rs.stale, "unreplayable run must read as stale: " + JSON.stringify(rs));
+      /* once that change is live, an unrelated edit must not be blamed for it:
+         the baseline is stale (recorded with DR) but this edit changes nothing */
+      const unrelated = clone(candidate);
+      unrelated.scenario.attributes.push({ id: "unused", label: "Unused", type: "boolean", default: false, section: 1 });
+      const [again] = V.admin.impact(candidate, unrelated, [baseline]);
+      assert.equal(again.added.length + again.removed.length, 0, JSON.stringify(again));
+      assert.ok(again.stale, "a run recorded under older rules is flagged stale");
+      /* versions append and cap */
+      const sc2 = { versions: [] };
+      for (let i = 0; i < 105; i++) V.admin.pushVersion(sc2, { target: "t" + i, before: i, after: i + 1 });
+      assert.equal(sc2.versions.length, 100);
+      assert.equal(sc2.versions[99].target, "t104");
+      assert.ok(sc2.versions[0].timestamp); assert.equal(sc2.versions[0].author, "", "author defaults to empty, never missing");
+    } finally { delete global.localStorage; }
+  });
+
+  await test("1.4.0: the impact replay sees what the chart sees; rule text round-trips bare rule ids", () => {
+    /* a disabled answer is neutralized before the build - in the app and in
+       the replay alike, or an untouched candidate reports phantom changes */
+    const syn = {
+      process: { units: "hours", activities: [task("a"), task("g", { predecessors: ["a"], when: { gated: true } })] },
+      taxonomy: clone(shipped.taxonomy),
+      scenario: {
+        attributes: [
+          { id: "tier", label: "Tier", type: "enum", default: "t0", options: [{ value: "t0" }, { value: "t1" }], section: 4 },
+          { id: "gated", label: "Gated", type: "boolean", default: false, enabledWhen: { tier: "t0" }, section: 4 }
+        ],
+        rules: {}
+      }
+    };
+    const answers = { tier: "t1", gated: true };           // gated is on but disabled
+    const eff = V.rules.effective(syn.scenario.attributes, answers, {});
+    assert.equal(eff.gated, false);
+    assert.equal(answers.gated, true, "effective() must not touch the person's answers");
+    const m = V.schedule.build(syn.process, syn.taxonomy, eff, {}, syn.scenario.attributes);
+    const run = V.runs.record(m, { scenario: answers }, "disabled answer");
+    assert.deepEqual(run.includedKeys, ["a"]);
+    const [row] = V.admin.impact(syn, clone(syn), [run]);
+    assert.equal(row.added.length + row.removed.length, 0, "unchanged candidate must replay identically: " + JSON.stringify(row));
+
+    /* the editor names rules R_<id>; shipped rules are keyed bare */
+    const d = clone({ process: shipped.process, scenario: shipped.scenario });
+    const ids = Object.keys(d.scenario.rules);
+    d.process.activities.filter(a => a.when !== undefined).forEach(a => {
+      const t = V.admin.ruleToText(a.when);
+      if (t.json) return;
+      const back = V.admin.textToRule(t.text, d.scenario.attributes, ids).rule;
+      assert.deepEqual(back, a.when, a.id + ": " + t.text);
+    });
+    const vc = V.admin.ruleToText({ any: [{ contractChangeRequired: true }, "newVendor"] });
+    assert.equal(vc.text, "contractChangeRequired OR R_newVendor");
+    assert.equal(V.admin.textToRule("FALSE", d.scenario.attributes, ids).rule, false);
+    /* a self-reference compiles (the name exists) - validation is what refuses it */
+    assert.equal(V.admin.textToRule("R_drRequired", d.scenario.attributes, ids).rule, "drRequired");
+    /* an unrepresentable shape falls back to JSON rather than lying */
+    const j = V.admin.ruleToText({ x: { gte: 3 } });
+    assert.ok(j.json && JSON.parse(j.text).x.gte === 3);
+    /* errors carry a column and a suggestion */
+    try { V.admin.textToRule("serviceTer = \"Tier 1\"", d.scenario.attributes, ids); assert.fail("should throw"); }
+    catch (e) { assert.equal(e.column, 1); assert.ok(/did you mean 'serviceTier'/.test(e.message), e.message); }
+  });
+
+  await test("1.4.0: admin edits survive a workbook export and re-import", async () => {
+    const toMatrix = sh => [sh.headers].concat(sh.rows.map(r => sh.headers.map(h => r[h] === undefined ? "" : r[h])));
+    const everything = d => { const all = {}; d.process.activities.forEach(a => { all[a.id] = true; }); return all; };
+    const roundTrip = d => {
+      const m = V.schedule.build(d.process, d.taxonomy, V.rules.defaults(d.scenario.attributes), d.scenario.rules, d.scenario.attributes, { derived: {}, tasks: everything(d) });
+      const sheets = {};
+      V.exportWorkbook.sheets(m, { scenarioCfg: d.scenario, scenarioSummary: "" }).forEach(sh => { sheets[sh.name] = toMatrix(sh); });
+      return { sheets, r: V.import.fromSheets(sheets, {}) };
+    };
+    const included = (d, sc) => JSON.stringify(V.schedule.build(d.process, d.taxonomy,
+      V.rules.effective(d.scenario.attributes, sc, d.scenario.rules), d.scenario.rules, d.scenario.attributes).nodes.map(n => n.id).sort());
+
+    const buf = fs.readFileSync(path.join(__dirname, "..", "fixture", "sample-value-stream.xlsx"));
+    const d = await V.import.fromWorkbook(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {});
+    const attrs = () => d.scenario.attributes, ids = () => Object.keys(d.scenario.rules);
+    /* the edits admin mode makes, through the same helpers it uses */
+    d.scenario.rules.R_TopTier = V.admin.textToRule('tier IN ["Tier 0"]', attrs(), ids()).rule;
+    attrs().splice(2, 0, { id: "residency", label: "Data must stay in-region?", type: "boolean", default: false, section: 5, group: "Sourcing" });
+    const a44 = d.process.activities.find(a => a.id === "44");            // matrix-sourced, carries a multiplier
+    V.admin.setCondition(a44, V.admin.textToRule("newService AND R_TopTier", attrs(), ids()).rule);
+    const a45 = d.process.activities.find(a => a.id === "45");
+    V.admin.setCondition(a45, V.admin.textToRule("residency OR R_Sourcing", attrs(), ids()).rule);
+    V.admin.pushVersion(d.scenario, { author: "A. Architect", target: "rule R_TopTier", before: "tier IN [...]", after: 'tier IN ["Tier 0"]' });
+    assert.equal(V.validate.run(d.process, d.taxonomy, d.scenario).errors.length, 0);
+    assert.equal(a44.appliesWhen, undefined, "an edited condition drops the stale workbook phrase");
+
+    const { sheets, r } = roundTrip(d);
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    /* nothing new beyond what the source workbook itself warns about, plus the
+       expected note on the two edited rows (they keep their matrix rows, which
+       still supply multipliers) */
+    const noise = r.report.warnings.filter(w => d.report.warnings.indexOf(w) < 0
+      && !/^(44|45): has both an Include Expression and a Scenario Matrix row/.test(w));
+    assert.deepEqual(noise, [], "unexpected warnings: " + JSON.stringify(noise));
+    assert.deepEqual(r.scenario.rules.R_TopTier, { tier: { in: ["Tier 0"] } });
+    assert.deepEqual(r.process.activities.find(a => a.id === "44").when, a44.when);
+    assert.equal(r.process.activities.find(a => a.id === "44").multipliers.length, 1, "the matrix multiplier still applies");
+    assert.deepEqual(r.process.activities.find(a => a.id === "45").when, a45.when);
+    assert.deepEqual(r.scenario.attributes.map(a => a.id), attrs().map(a => a.id), "variable order");
+    assert.equal(r.scenario.attributes.find(a => a.id === "residency").section, 5);
+    assert.equal(JSON.stringify(r.scenario.versions), JSON.stringify(d.scenario.versions), "version log incl. author");
+    /* and the thing that matters: every scenario includes the same tasks */
+    const base = V.rules.defaults(attrs());
+    const scs = [base, Object.assign({}, base, { residency: true }), Object.assign({}, base, { tier: "Tier 1", newService: true })]
+      .concat(d.scenario.presets.map(p => V.rules.applyPreset(attrs(), base, p)));
+    scs.forEach((sc, i) => assert.equal(included(r, sc), included(d, sc), "scenario #" + i + " changed across the round trip"));
+    /* a second trip is a fixed point: same sheets */
+    const again = roundTrip(r).sheets;
+    ["Task List", "Toggles", "Rules", "Scenario Matrix", "Versions"].forEach(n =>
+      assert.equal(JSON.stringify(again[n]), JSON.stringify(sheets[n]), n + " drifted on the second trip"));
+
+    /* a retired variable's (necessarily empty) matrix column is not written back */
+    const g = JSON.parse(JSON.stringify(d));
+    g.scenario.matrixSheet.headers.push("ghost");
+    g.scenario.matrixSheet.rows.forEach(row => row.push(""));
+    assert.ok(!roundTrip(g).sheets["Scenario Matrix"][0].includes("ghost"));
+
+    /* the shipped data (bare rule ids, no workbook of origin): conditions and
+       named rules come back, and no phantom switches appear */
+    const sd = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const s2 = roundTrip(sd).r;
+    assert.equal(s2.report.errors.length, 0, JSON.stringify(s2.report.errors));
+    assert.equal(s2.scenario.attributes.length, sd.scenario.attributes.length, "phantom switches from Applies When phrases");
+    /* compared as canonical text: {a, b} and {all: [a, b]} are the same rule,
+       and the printer names every rule reference R_ either way */
+    const canon = rule => V.admin.ruleToText(rule === undefined ? true : rule).text;
+    sd.process.activities.forEach(a => {
+      if (V.admin.ruleToText(a.when === undefined ? true : a.when).json) return;
+      assert.equal(canon(s2.process.activities.find(x => x.id === a.id).when), canon(a.when), a.id);
+    });
+    Object.keys(sd.scenario.rules).forEach(id => assert.equal(canon(s2.scenario.rules["R_" + id]), canon(sd.scenario.rules[id]), id));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

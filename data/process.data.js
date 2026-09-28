@@ -202,6 +202,7 @@ VSM.register("process", {
 
     { "id": "dr-design", "name": "DR strategy & runbook design", "phase": "design", "owner": "resilience",
       "category": "value", "duration": { "current": 6, "optimal": 4 }, "predecessors": ["arch-design"],
+      "canOverride": "yes",
       "when": "drRequired",
       "description": "Define RTO/RPO, failover approach and recovery runbook." },
 
@@ -306,11 +307,13 @@ VSM.register("process", {
 
     { "id": "dr-env-cloud", "name": "DR environment provisioning (cloud region)", "phase": "provision", "owner": "cloud",
       "category": "enabling", "duration": { "current": 4, "optimal": 2 }, "predecessors": ["cloud-iac", "dr-design"],
+      "canOverride": "yes",
       "when": { "all": ["drRequired", "cloud"] },
       "description": "Deploy the secondary-region footprint from the same infrastructure code." },
 
     { "id": "dr-env-onprem", "name": "DR environment provisioning (secondary DC)", "phase": "provision", "owner": "infra",
       "category": "enabling", "waste": "manual", "duration": { "current": 20, "optimal": 10 }, "predecessors": ["onprem-os", "dr-design"],
+      "canOverride": "yes",
       "when": { "all": ["drRequired", "onPrem"] },
       "description": "Repeat the compute, storage and network build in the secondary data center." },
 
@@ -406,6 +409,7 @@ VSM.register("process", {
 
     { "id": "dr-test", "name": "DR failover test", "phase": "build", "owner": "resilience",
       "category": "enabling", "waste": "testing", "duration": { "current": 5, "optimal": 3 }, "predecessors": ["dr-env-cloud", "dr-env-onprem", "qa-test"],
+      "canOverride": "yes",
       "when": "drRequired",
       "description": "Planned failover and failback with evidence for the resilience standard." },
 
@@ -416,7 +420,8 @@ VSM.register("process", {
 
     { "id": "sec-attest", "name": "Security attestation / go-live sign-off", "phase": "release", "owner": "security",
       "category": "approval", "waste": "approval-gate", "duration": { "current": 5, "optimal": 1 }, "predecessors": ["pen-test", "sec-findings-rework", "ops-readiness"],
-            "description": "Security confirms findings are closed or risk-accepted." },
+            "canOverride": "governed",
+      "description": "Security confirms findings are closed or risk-accepted." },
 
     { "id": "privacy-signoff", "name": "Privacy sign-off", "phase": "release", "owner": "legal",
       "category": "approval", "waste": "approval-gate", "duration": { "current": 3, "optimal": 1 }, "predecessors": ["privacy-review", "uat"],
@@ -425,6 +430,7 @@ VSM.register("process", {
 
     { "id": "cab", "name": "Change Advisory Board approval", "phase": "release", "owner": "cab",
       "category": "approval", "waste": "approval-gate", "duration": { "current": 7, "optimal": 1 }, "predecessors": ["ops-readiness", "sec-attest", "privacy-signoff", "dr-test", "defect-rework", "perf-test"],
+      "canOverride": "governed",
       "description": "Change record is reviewed at the weekly CAB.",
       "notes": "Standard changes with automated evidence could be pre-approved." },
 
