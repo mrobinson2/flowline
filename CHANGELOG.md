@@ -1,3 +1,63 @@
+# Flowline 1.6.0
+
+Prepared 28 September 2026 from 1.5.1. Answers a user review of the sidebar: *Build on Paved Road* and *Build Custom* showed the same numbers, and lifecycle stage, runtime model, Generative AI and the selection facts changed nothing. Measured before changing anything: the engine was right, but the shipped sample's content was thin. About a third of the options drove no step, the standard and custom architecture routes produced the same steps, Generative AI gated nothing, every selection route led to the same single RFP step, and six derived values were read by nothing. This release is sample data plus a test that keeps it honest. No engine change, and the default map is unchanged: 39 activities, 198 days, the same excess, handoffs, gates and waiting.
+
+## Changed
+
+1. **Every sidebar answer now drives work.** Each option of each question adds or removes steps, or stretches the ones it touches, in at least one realistic scenario. 43 new conditional steps (112 in the register, still 39 in the default map):
+   - **Architecture route:** the custom route adds an architecture waiver (a gate) and a security architecture deep-dive. *Build Custom* is the custom route by definition, so Paved Road and Custom now differ at every service tier. At Tier 0–2 they had been identical, because only Tier 3/4 earns the fast route, and standard and custom produced the same steps. *New technology* alone adds a supportability assessment.
+   - **Generative AI** implies AI/ML and adds red-team and content-safety evaluation, plus approvals for a model-policy exception and for run-rate above $1k/month.
+   - **Selection facts:** product evaluation, RFI, RFP and proof of concept are separate steps with their own durations, so each of the six routes has its own shape. Sole source adds a justification gate; an existing approved vendor halves the risk assessment and onboarding; a software license adds license procurement; vendor-hosted data adds a DPA.
+   - **Lifecycle stage:** a PoC or pilot adds an exit review and drops production DR and hypercare. A change to an existing service builds and tests at 0.6×. A capacity expansion re-baselines performance at 1.5×. A migration adds a cutover rehearsal. A retirement adds a decommission and retention sign-off.
+   - **Runtime model:** each runtime adds its own onboarding step; without PaaS the network build is lighter.
+   - **Identity, network and data scope:** every option brings its step. Examples: PAM approval, CIAM integration, firewall change, hybrid connectivity, certificate issuance, PCI scoping, a SOX/GLBA compliance review, a residency review.
+   - **Support and delivery:** any support model other than stream-aligned adds an operations handover (1.6× when it crosses to central operations). Managed service adds SLA onboarding. Platform self-service halves the infrastructure-as-code build.
+   - **Derived values that were read by nothing now matter:** high availability adds HA design; 24x7 support adds on-call onboarding; performance validation gates the performance test; a formal DR test doubles the DR test; WAF gates the internet-exposure review.
+
+2. **Preset numbers that changed (intended):**
+
+   ```text
+                          before (1.5.0)          after (1.6.0)
+   Default                198 d  9 gates 39 steps  198 d  9 gates 39 steps
+   Adopt SaaS             238 d 12 gates 40 steps  226 d 13 gates 41 steps   evaluation, not a full RFP
+   Deploy COTS            282 d 12 gates 45 steps  262 d 12 gates 46 steps
+   Build on Paved Road    198 d  9 gates 39 steps  198 d  9 gates 39 steps
+   Build Custom           215 d 11 gates 42 steps  220 d 12 gates 44 steps
+   Paved Road at Tier 1   215 d 11 gates 42 steps  220 d 11 gates 44 steps
+   Custom at Tier 1       215 d 11 gates 42 steps  225 d 12 gates 46 steps   was identical to Paved
+   AI / ML workload       199 d 12 gates 45 steps  199 d 12 gates 45 steps
+   Generative AI          198 d  9 gates 39 steps  207 d 12 gates 46 steps   was a no-op
+   Lifecycle: PoC         198 d  9 gates 39 steps  193 d 10 gates 36 steps
+   ```
+
+   Rehost, Modernize and Expand Capacity are unchanged.
+
+## Added
+
+3. **A regression that fails when an answer stops mattering.** It flips every option of every question in the default, every preset and three context scenarios (on-premises hosting, Generative AI, SaaS with an unproven claim), and fails if any value changes nothing. A multi-select option must *add* something, not just pass by displacing the default. The same group pins the default map and checks three things: Generative AI covers AI/ML, Paved Road differs from Custom at every tier, and the six selection routes are distinct.
+
+4. **The README explains why an end date may not move.** The three elapsed figures follow the critical path, so a step that runs in parallel with spare time changes the chart, excess, handoffs, gates and waiting, but not the end date. Leaving production deployment out removes three DR steps and leaves 198 days at 198.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     101 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (605 KB)
+```
+
+Browser-verified in Chrome through the real sidebar and preset dropdown. The results:
+- Paved Road 198 d against Custom 220 d, and 220 d against 225 d at Tier 1.
+- Generative AI 207 d with 12 gates, against AI/ML at 199 d.
+- A PoC 193 d with 36 steps.
+- Central-operations support adds 8 days.
+- The SaaS routes run 226 d (evaluation), 241 d (evaluation with PoC) and 261 d (RFI and RFP).
+
+---
+
 # Flowline 1.5.1
 
 Prepared 28 September 2026 from 1.5.0. Repository audit fixes for clipboard imports, saved scenarios, embedded charts, duration calculations, and editing/export failures.
