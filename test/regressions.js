@@ -1440,7 +1440,9 @@ function form(extra = {}) {
     /* tier drives the DR chain */
     const t4 = build2({ serviceTier: "Tier 4" });
     const dropped = OLD_DEFAULT_IDS.filter(x => !t4.nodes.some(n => n.id === x));
-    assert.ok(dropped.length >= 3 && dropped.every(x => /^dr-/.test(x) || x === "dr-test"), JSON.stringify(dropped));
+    /* 1.6.0: Tier 4 also needs no performance validation, and that derived
+       flag now gates the performance test */
+    assert.ok(dropped.length >= 3 && dropped.every(x => /^dr-/.test(x) || x === "perf-test"), JSON.stringify(dropped));
     /* pattern conformance drives the lane, the lane drives the ARB chain */
     const std = build2({ patternConforms: false });
     ["arb", "arb-rework", "sec-design-recheck"].forEach(id =>
@@ -1516,11 +1518,13 @@ function form(extra = {}) {
     assert.ok(svc.nodes.some(n => n.id === "vendor-onboard"), "access -> onboarding");
     assert.ok(svc.nodes.some(n => n.id === "vendor-risk"), "third party with access -> risk assessment");
     assert.ok(!svc.nodes.some(n => n.id === "vendor-contract"), "no new vendor, no contract negotiation");
-    assert.ok(!svc.nodes.some(n => n.id === "vendor-rfp"), "no product selection for a services engagement");
-    /* the SaaS profile still lights its vendor chain through the new facts */
+    assert.ok(!svc.nodes.some(n => n.id === "vendor-rfp" || n.id === "prod-eval"), "no product selection for a services engagement");
+    /* the SaaS profile still lights its vendor chain through the new facts;
+       1.6.0: its default route is an evaluation, which is its own step now
+       (an RFP only when the selection facts call for one) */
     const saas = d.scenario.presets.find(p => p.id === "adopt-saas");
     const saasModel = build2(saas.set);
-    ["vendor-rfp", "vendor-risk", "vendor-contract"].forEach(id =>
+    ["prod-eval", "vendor-risk", "vendor-contract"].forEach(id =>
       assert.ok(saasModel.nodes.some(n => n.id === id), id + " must fire for SaaS adoption"));
     /* identity is its own vocabulary now */
     assert.ok(!d.scenario.attributes.find(a => a.id === "integrations").options.some(o => /sso|internet|proxy|private/i.test(o.value)),
@@ -1891,6 +1895,77 @@ function form(extra = {}) {
     row[hd.indexOf("Derivation")] = "custom WHEN nosuchThing; ELSE standard";
     const rb = V.import.fromSheets(bad, {});
     assert.ok(rb.report.warnings.some(w => /architectureLane/.test(w) && /Derivation/.test(w)), JSON.stringify(rb.report.warnings));
+  });
+
+  await test("1.6.0: every menu answer drives work, and the default map does not move", () => {
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const A = d.scenario.attributes, R = d.scenario.rules;
+    const base = V.rules.defaults(A);
+    const build = sc => V.schedule.build(d.process, d.taxonomy, V.rules.effective(A, sc, R), R, A);
+    const sig = sc => {
+      const m = build(sc), x = m.metrics, r1 = v => Math.round(v * 10) / 10;
+      return JSON.stringify({ el: r1(x.currentElapsed), opt: r1(x.optimalElapsed), exc: r1(x.sumExcess), ho: x.handoffs, g: x.gates, w: r1(x.waitingCurrent), ids: m.nodes.map(n => n.id).sort() });
+    };
+    const ids = sc => build(sc).nodes.map(n => n.id);
+
+    /* the default map is exactly what 1.5.0 shipped */
+    const m0 = build(base).metrics;
+    assert.deepEqual([m0.currentElapsed, m0.optimalElapsed, Math.round(m0.sumExcess * 10) / 10, m0.handoffs, m0.gates, m0.waitingCurrent, build(base).nodes.length],
+      [198, 90.5, 161.5, 31, 9, 69, 39], "the default map moved");
+
+    /* contexts an answer is flipped in: the default, every preset, and the
+       states that switch a gated question on */
+    const preset = id => V.rules.applyPreset(A, base, d.scenario.presets.find(p => p.id === id));
+    const contexts = [base]
+      .concat(d.scenario.presets.map(p => V.rules.applyPreset(A, base, p)))
+      .concat([Object.assign({}, base, { hosting: "on-prem" }),
+        Object.assign({}, base, { genAiWorkload: true, aiWorkload: true }),
+        Object.assign(preset("adopt-saas"), { unprovenTechnicalClaim: true })]);
+    /* A value is live when, in some context, it gives a different map from
+       at least one other value of the same question. For a multi-select a
+       value is compared alone against nothing, and added against removed. */
+    const dead = [];
+    A.filter(a => !a.derived && !a.hidden).forEach(a => {
+      const values = a.type === "boolean" ? [true, false] : (a.options || []).map(o => o.value);
+      values.forEach(v => {
+        const live = contexts.some(c => {
+          const at = val => sig(Object.assign({}, c, { [a.id]: val }));
+          if (a.type === "multi") {
+            const rest = (Array.isArray(c[a.id]) ? c[a.id] : []).filter(x => x !== v);
+            return at([v]) !== at([]) || at(rest.concat([v])) !== at(rest);
+          }
+          const mine = at(v);
+          return values.some(u => u !== v && at(u) !== mine);
+        });
+        if (!live) dead.push(a.id + "=" + v);
+      });
+    });
+    assert.deepEqual(dead, [], "answers that change nothing in any context: " + dead.join(", "));
+
+    /* every derived value is read by something that reaches the map */
+    const unread = A.filter(a => a.derived && !V.admin.referencesTo(d, a.id).some(r => r.kind !== "preset")).map(a => a.id);
+    assert.deepEqual(unread, [], "derived values nothing reads: " + unread.join(", "));
+
+    /* RF#3 GenAI is AI/ML plus more */
+    const ai = ids(Object.assign({}, base, { aiWorkload: true })), gen = ids(Object.assign({}, base, { genAiWorkload: true }));
+    assert.ok(ai.every(id => gen.includes(id)), "GenAI must include every AI/ML step");
+    assert.ok(gen.length > ai.length, "GenAI must add its own steps");
+    /* RF#4 Paved Road and Custom differ at every tier */
+    ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "tbd"].forEach(t =>
+      assert.notEqual(sig(Object.assign(preset("build-paved"), { serviceTier: t })), sig(Object.assign(preset("build-custom"), { serviceTier: t })), "paved = custom at " + t));
+    /* RF#5 each selection route has its own shape */
+    const saas = preset("adopt-saas");
+    const routes = {
+      eval: {}, rfp: { competitiveSourcing: true }, "rfi-rfp": { requirementsUnderstood: false },
+      "eval-poc": { unprovenTechnicalClaim: true }, "rfp-poc": { competitiveSourcing: true, unprovenTechnicalClaim: true },
+      "rfi-rfp-poc": { requirementsUnderstood: false, unprovenTechnicalClaim: true }
+    };
+    const shapes = Object.keys(routes).map(k => {
+      const m = build(Object.assign({}, saas, routes[k]));
+      assert.equal(m.derived.provenance.selectionRoute.value, k);
+      return JSON.stringify(m.nodes.map(n => n.id).filter(id => /^vendor-|^prod-eval/.test(id)).sort());
+    });
+    assert.equal(new Set(shapes).size, shapes.length, "selection routes share a task set: " + shapes.join(" | "));
   });
 
   console.log("\n" + passed + " regression groups passed, 0 failed");

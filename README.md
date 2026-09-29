@@ -18,6 +18,8 @@ In the sample data above, the current schedule runs 198 days. Using the entered 
 
 The metrics panel also reports the sum of time inside activities. That answers a different question: total effort rather than elapsed time. For a purely sequential process the two are equal. The more parallelism, the further apart they drift, and it is worth knowing which one you are quoting.
 
+That difference also explains a common surprise when you change an answer in the sidebar. Every answer in the sample now adds, removes or stretches work (a test holds that to be true), but the three elapsed figures (current, optimal, removable) move only when the change lands on the critical path. A step that runs in parallel with spare time still shows up in the chart, in excess time, handoffs, gates and waiting — just not in the end date. Leaving production deployment out, for instance, removes three DR steps and leaves the end date where it was.
+
 ## Quick start
 
 ```bash
@@ -28,7 +30,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.5.1 release](https://github.com/mrobinson2/flowline/releases/tag/v1.5.1) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.6.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.6.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 

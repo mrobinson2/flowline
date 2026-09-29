@@ -28,9 +28,9 @@
    you need a privacy review?" - they say what data is involved. Nobody picks
    an architecture lane - pattern facts and the service tier derive it.
 
-   Some options here are vocabulary-first: runtime model, delivery ownership
-   and most identity choices describe the workload for exports and future
-   rules without yet driving a sample activity. Their help text says so.
+   Every option drives the sample map in at least one scenario (1.6.0): an
+   answer either adds or removes steps, or stretches the ones it touches.
+   test/regressions.js fails the day an option stops changing anything.
    ========================================================================== */
 VSM.register("scenario", {
   "attributes": [
@@ -78,7 +78,7 @@ VSM.register("scenario", {
         { "value": "existing-platform", "label": "Existing enterprise platform" }
       ] },
     { "id": "runtimeModel", "section": 2, "group": "Platform", "label": "Runtime / service model", "type": "multi", "default": ["paas"],
-      "help": "Vocabulary-first: describes the workload for exports and rules. The sample binds only the private-endpoint derivation to it so far.",
+      "help": "Each runtime brings its own platform onboarding step; PaaS brings private-endpoint networking (without PaaS the network build is lighter).",
       "options": [
         { "value": "iaas",            "label": "IaaS / virtual machines" },
         { "value": "containers",      "label": "Containers / Kubernetes" },
@@ -91,7 +91,8 @@ VSM.register("scenario", {
       ] },
     { "id": "aiWorkload", "section": 2, "group": "AI", "label": "AI / ML workload", "type": "boolean", "default": false },
     { "id": "genAiWorkload", "section": 2, "group": "AI", "label": "Generative AI workload", "type": "boolean", "default": false,
-      "help": "Generative AI carries its own approval path beyond traditional ML." },
+      "implies": ["aiWorkload"],
+      "help": "Generative AI is an AI/ML workload plus its own path: red-team and content-safety evaluation, and approvals for policy exceptions and run-rate." },
     { "id": "genAiMonthlyCostOver1k", "section": 2, "group": "AI", "label": "GenAI run-rate over $1k/month", "type": "boolean", "default": false,
       "shownWhen": { "genAiWorkload": true } },
     { "id": "azureOpenAiPolicyException", "section": 2, "group": "AI", "label": "Model policy exception required", "type": "boolean", "default": false,
@@ -210,7 +211,7 @@ VSM.register("scenario", {
         { "value": "self-service",    "label": "Platform self-service" }
       ] },
     { "id": "supportModel", "section": 6, "group": "Delivery model", "label": "Production support model", "type": "enum", "default": "stream-aligned",
-      "help": "Vocabulary-first: recorded with the scenario and exports; the sample's run activities are unconditional.",
+      "help": "Anything other than the stream-aligned team owning its own operations adds an operations handover - longest when it crosses to a separate central operations group.",
       "options": [
         { "value": "stream-aligned", "label": "Stream-aligned team owns operations" },
         { "value": "platform-sre",   "label": "Platform / SRE-supported" },
@@ -233,10 +234,10 @@ VSM.register("scenario", {
 
     { "id": "drRequired", "group": "Derived", "label": "DR required", "type": "boolean", "default": true,
       "derived": true,
-      "derive": { "when": { "all": [{ "productionIncluded": true }, { "serviceTier": { "in": ["Tier 0", "Tier 1", "Tier 2", "Tier 3"] } }] } } },
+      "derive": { "when": { "all": [{ "productionIncluded": true }, { "lifecycleStage": { "notIn": ["poc", "pilot"] } }, { "serviceTier": { "in": ["Tier 0", "Tier 1", "Tier 2", "Tier 3"] } }] } } },
     { "id": "formalDrTestRequired", "group": "Derived", "label": "Formal DR test before go-live", "type": "boolean", "default": false,
       "derived": true,
-      "derive": { "when": { "all": [{ "productionIncluded": true }, { "serviceTier": { "in": ["Tier 0", "Tier 1", "Tier 2"] } }] } } },
+      "derive": { "when": { "all": [{ "productionIncluded": true }, { "lifecycleStage": { "notIn": ["poc", "pilot"] } }, { "serviceTier": { "in": ["Tier 0", "Tier 1", "Tier 2"] } }] } } },
     { "id": "highAvailability", "group": "Derived", "label": "High availability required", "type": "boolean", "default": false,
       "derived": true,
       "derive": { "when": { "serviceTier": { "in": ["Tier 0", "Tier 1"] } } } },
@@ -267,7 +268,7 @@ VSM.register("scenario", {
       ],
       "derive": {
         "cases": [
-          { "when": { "any": [{ "architectureDeviation": true }, { "newEnterprisePlatform": true },
+          { "when": { "any": [{ "workType": "custom" }, { "architectureDeviation": true }, { "newEnterprisePlatform": true },
                               { "all": [{ "newTechnology": true }, { "serviceTier": { "in": ["Tier 0", "Tier 1"] } }] }] },
             "value": "custom" },
           { "when": { "all": [{ "approvedPatternExists": true }, { "patternConforms": true },
