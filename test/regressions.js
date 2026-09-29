@@ -1998,5 +1998,77 @@ function form(extra = {}) {
     assert.equal(JSON.stringify(onlyProcess.process), JSON.stringify(shippedNow.process));
   });
 
+  await test("1.6.2: the days/hours switch converts what is shown, never the data", () => {
+    const U = V.units;
+    const hrs = { units: "hours", hoursPerDay: 8 }, days = { units: "business days" }, wks = { units: "weeks" };
+    /* the data's own unit, untouched: auto (or no choice) is the old behaviour */
+    ["auto", undefined].forEach(display => {
+      const u = U.resolve(hrs, { display });
+      assert.equal(u.id, "hours"); assert.equal(u.abbr, "h"); assert.equal(u.v(80), 80); assert.equal(u.tickSize, 8);
+    });
+    /* hours shown as business days: 80 h is 10 d; a gridline every business week (40 h) */
+    const hd = U.resolve(hrs, { display: "days" });
+    assert.equal(hd.id, "days"); assert.equal(hd.abbr, "d"); assert.equal(hd.v(80), 10); assert.equal(hd.f(84), "10.5");
+    assert.equal(hd.tickSize, 40, "tick spacing stays in the model's (source) unit");
+    assert.equal(hd.tickLabel(2), "Wk 2"); assert.equal(hd.originLabel, "Bus. day 0");
+    assert.equal(hd.endLabel(1584), "Business day 198");
+    assert.equal(hd.secondary(1584), U.resolve(hrs).secondary(1584), "the human translation does not change");
+    /* a 10-hour working day is honoured */
+    assert.equal(U.resolve({ units: "hours", hoursPerDay: 10 }, { display: "days" }).v(100), 10);
+    /* days shown as hours */
+    const dh = U.resolve(days, { display: "hours" });
+    assert.equal(dh.id, "hours"); assert.equal(dh.v(198), 1584); assert.equal(dh.tickSize, 1); assert.equal(dh.tickLabel(3), "Bus. day 3");
+    assert.equal(dh.endLabel(198), "Hour 1584");
+    /* weeks convert both ways */
+    assert.equal(U.resolve(wks, { display: "days" }).v(2), 10);
+    assert.equal(U.resolve(wks, { display: "hours" }).v(1), 40);
+    /* asking for the unit the data is already in changes nothing */
+    assert.equal(U.resolve(days, { display: "days" }).v(7), 7);
+    /* an unknown choice falls back to the data's own unit */
+    assert.equal(U.resolve(hrs, { display: "fortnights" }).id, "hours");
+
+    /* end to end: an hours model drawn with days shown says days on the axis */
+    withRenderer(render => {
+      const acts = [task("a", { duration: { current: 80, optimal: 40 } }), task("b", { predecessors: ["a"], duration: { current: 40, optimal: 8 } })];
+      const data = dataset(acts); data.process.units = "hours"; data.process.hoursPerDay = 8;
+      const model = build(data);
+      const L = V.layout.interactive(2, { width: 1200, zoom: 1, density: "normal", columns: true });
+      const texts = svg => walk(svg).filter(e => e.tag === "text").map(e => e.textContent).join(" | ");
+      const asHours = texts(render.draw(model, { layout: L, view: "current", display: {}, filters: null, scenarioSummary: "", theme: "dark" }));
+      const asDays = texts(render.draw(model, { layout: L, view: "current", display: { timeUnit: "days" }, filters: null, scenarioSummary: "", theme: "dark" }));
+      assert.ok(/Hour 120/.test(asHours), asHours.slice(0, 300));
+      assert.ok(/Business day 15/.test(asDays), asDays.slice(0, 300));
+      assert.ok(/\b10 \/ 5 \/ 5\b/.test(asDays), "row columns in days: " + asDays.slice(0, 400));
+      assert.equal(model.metrics.currentElapsed, 120, "the model itself stays in hours");
+    });
+  });
+
+  await test("1.6.2: a hidden element stays hidden - no display rule without a [hidden] rule", () => {
+    /* 1.6.1 gave the stale-data notice display:flex, which beats the hidden
+       attribute, and every visitor saw an empty orange bar above the metrics */
+    const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+    const css = fs.readFileSync(path.join(__dirname, "..", "css", "app.css"), "utf8");
+    const hiddenEls = [...html.matchAll(/<\w+[^>]*>/g)].map(m => m[0]).filter(tag => /\shidden(\s|>|=)/.test(tag));
+    const selectors = [];
+    hiddenEls.forEach(tag => {
+      const id = /\sid="([^"]+)"/.exec(tag);
+      if (id) selectors.push("#" + id[1]);
+      const cls = /\sclass="([^"]+)"/.exec(tag);
+      if (cls) cls[1].split(/\s+/).forEach(c => selectors.push("." + c));
+    });
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+    const bad = [];
+    selectors.forEach(sel => {
+      const esc = sel.replace(/[.#]/g, "\\$&");
+      const shows = rules.some(r => /display\s*:\s*(?!none)/.test(r.body) &&
+        r.sel.split(",").some(x => new RegExp("^" + esc + "$").test(x.trim())));
+      if (!shows) return;
+      const guarded = rules.some(r => /display\s*:\s*none/.test(r.body) &&
+        r.sel.split(",").some(x => new RegExp("^" + esc + "\\[hidden\\]$").test(x.trim())));
+      if (!guarded) bad.push(sel);
+    });
+    assert.deepEqual(bad, [], "display rules that override [hidden]: " + bad.join(", "));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

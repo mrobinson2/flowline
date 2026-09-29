@@ -61,7 +61,8 @@
   }
   const calendarDays = businessDays => Math.round(businessDays * CALENDAR_RATIO);
 
-  function resolve(process, opts) {
+  /* The unit the DATA is in. Everything the scheduler computes stays in it. */
+  function source(process, opts) {
     const raw = String((process && (process.units || process.unit)) || "business days").toLowerCase();
     /* hoursPerDay sets the gridline spacing, so a zero, a negative or an
        infinity out of an imported file would make the axis meaningless (and
@@ -73,7 +74,7 @@
 
     if (/hour|hrs?\b/.test(raw)) {
       return {
-        id: "hours", abbr: "h", one: "hour", many: "hours", perDay,
+        id: "hours", abbr: "h", one: "hour", many: "hours", perDay, hoursPerDay: perDay,
         tickSize: perDay,
         tickLabel: i => "Bus. day " + i,
         originLabel: "Hour 0",
@@ -85,7 +86,7 @@
     }
     if (/week/.test(raw)) {
       return {
-        id: "weeks", abbr: "wk", one: "week", many: "weeks", perDay: 1 / DAYS_PER_WEEK,
+        id: "weeks", abbr: "wk", one: "week", many: "weeks", perDay: 1 / DAYS_PER_WEEK, hoursPerDay: perDay,
         tickSize: 4, tickLabel: i => "M" + i, originLabel: "Week 0",
         endLabel: total => "Week " + fmt(total),
         secondary: total => human(total * DAYS_PER_WEEK),
@@ -93,7 +94,7 @@
       };
     }
     return {
-      id: "days", abbr: "d", one: "business day", many: "business days", perDay: 1,
+      id: "days", abbr: "d", one: "business day", many: "business days", perDay: 1, hoursPerDay: perDay,
       tickSize: DAYS_PER_WEEK,
       tickLabel: i => "Wk " + i,
       originLabel: "Bus. day 0",
@@ -101,6 +102,44 @@
       secondary: total => human(total),
       toDays: v => v
     };
+  }
+
+  /* resolve(process, { fmt, display }) -> how to WRITE a time.
+
+     display "days" | "hours" shows figures in that unit whatever the data is
+     in; anything else ("auto", absent, unknown) shows the data's own unit.
+     This is presentation only: every figure a caller passes in is still in
+     the data's unit (the model is never rescaled), and `v` / `f` convert on
+     the way out - v(x) the number, f(x) the formatted text. tickSize stays in
+     the data's unit because it spaces gridlines on the model's axis; the
+     labels count in the shown unit. `toDays` and `secondary` describe the
+     data and do not change with the choice. */
+  function resolve(process, opts) {
+    const src = source(process, opts);
+    const fmt = (opts && opts.fmt) || (n => String(round1(n)));
+    const want = opts && opts.display;
+    const identity = Object.assign({}, src, { v: x => x, f: x => fmt(x) });
+    if ((want !== "days" && want !== "hours") || want === src.id) return identity;
+    const daysPerSource = src.toDays(1);
+    const scale = want === "hours" ? daysPerSource * src.hoursPerDay : daysPerSource;
+    const v = x => x * scale;
+    const common = { v, f: x => fmt(v(x)), toDays: src.toDays, secondary: src.secondary, hoursPerDay: src.hoursPerDay, perDay: src.perDay, sourceId: src.id };
+    if (want === "days") {
+      return Object.assign(common, {
+        id: "days", abbr: "d", one: "business day", many: "business days",
+        tickSize: DAYS_PER_WEEK / daysPerSource,           // a business week, in source units
+        tickLabel: i => "Wk " + i,
+        originLabel: "Bus. day 0",
+        endLabel: total => "Business day " + fmt(v(total))
+      });
+    }
+    return Object.assign(common, {
+      id: "hours", abbr: "h", one: "hour", many: "hours",
+      tickSize: 1 / daysPerSource,                          // a business day, in source units
+      tickLabel: i => "Bus. day " + i,
+      originLabel: "Hour 0",
+      endLabel: total => "Hour " + fmt(v(total))
+    });
   }
 
   VSM.units = { resolve, human, calendarDays, HOURS_PER_DAY, DAYS_PER_WEEK, DAYS_PER_MONTH, DAYS_PER_YEAR, CALENDAR_RATIO };

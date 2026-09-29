@@ -23,7 +23,9 @@
   const fmt = VSM.render.fmt, pct = VSM.render.pct;
   /* Time is written in whatever unit the loaded data uses: the sample data is
      in business days, the source workbook is in hours. See js/units.js. */
-  const units = () => VSM.units.resolve(data && data.process, { fmt });
+  /* the unit figures are WRITTEN in: the data's own, or the viewer's choice
+     (Options panel). The model is never rescaled - see js/units.js */
+  const units = () => VSM.units.resolve(data && data.process, { fmt, display: state && state.display && state.display.timeUnit });
 
   let data = null;       // { process, taxonomy, scenario }
   let state = null;      // persisted UI state
@@ -136,7 +138,7 @@
       profile: null,
       view: "current",
       filters: { wasteTypes: [], owners: [], search: "" },
-      display: { links: "all", phases: true, columns: true, presentColumns: false, critical: false, density: "normal", zoom: 1, hideNonMatching: false, presentMetrics: true },
+      display: { timeUnit: "auto", links: "all", phases: true, columns: true, presentColumns: false, critical: false, density: "normal", zoom: 1, hideNonMatching: false, presentMetrics: true },
       theme: "dark",
       sidebar: true,
       metricsPanel: true
@@ -180,6 +182,7 @@
         state.view = saved.view || state.view;
         state.filters = Object.assign(state.filters, saved.filters || {});
         state.display = Object.assign(state.display, saved.display || {});
+        if (["auto", "days", "hours"].indexOf(state.display.timeUnit) < 0) state.display.timeUnit = "auto";
         if (typeof saved.sidebar === "boolean") state.sidebar = saved.sidebar;
         if (typeof saved.metricsPanel === "boolean") state.metricsPanel = saved.metricsPanel;
         if (saved.theme === "light" || saved.theme === "dark") state.theme = saved.theme;
@@ -258,6 +261,7 @@
 
   /* ------------------------------------------------------------ rendering */
   function rebuild() {
+    labelTimeUnit();
     const issues = checkData(data);
     if (issues.errors.length) return;
     /* The scheduler sees things validation does not check for (a cycle only
@@ -297,7 +301,7 @@
     const wrap = $("#chart-wrap");
     const width = Math.max(wrap.clientWidth - 8, 600);
     if (state.view === "tracker") {
-      svg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.interactive(width), theme: state.theme, scenarioSummary: scenarioSummary() });
+      svg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.interactive(width), display: state.display, theme: state.theme, scenarioSummary: scenarioSummary() });
     } else {
       const L = VSM.layout.interactive(model.nodes.length, { width, zoom: state.display.zoom, density: state.display.density, columns: state.display.columns });
       svg = VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });
@@ -310,7 +314,7 @@
 
   function renderPresentation() {
     if (state.view === "tracker") {
-      presentSvg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), theme: state.theme, scenarioSummary: scenarioSummary() });
+      presentSvg = VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), display: state.display, theme: state.theme, scenarioSummary: scenarioSummary() });
       const stage = $("#present-stage");
       stage.innerHTML = "";
       stage.appendChild(presentSvg);
@@ -334,13 +338,13 @@
     const U = units(), u = " " + U.abbr;
     const also = v => U.secondary ? " · " + U.secondary(v) : "";
     const tiles = [
-      ["Current elapsed", fmt(m.currentElapsed) + u, "end-to-end today" + also(m.currentElapsed)],
-      ["Optimal elapsed", fmt(m.optimalElapsed) + u, "every step at its minimum" + also(m.optimalElapsed)],
-      ["Removable elapsed", fmt(m.removableElapsed) + u, pct(m.removablePct) + " of the current path", "accent"],
-      ["Excess in activities", fmt(m.sumExcess) + u, "of " + fmt(m.sumCurrent) + " activity-" + U.many],
+      ["Current elapsed", U.f(m.currentElapsed) + u, "end-to-end today" + also(m.currentElapsed)],
+      ["Optimal elapsed", U.f(m.optimalElapsed) + u, "every step at its minimum" + also(m.optimalElapsed)],
+      ["Removable elapsed", U.f(m.removableElapsed) + u, pct(m.removablePct) + " of the current path", "accent"],
+      ["Excess in activities", U.f(m.sumExcess) + u, "of " + U.f(m.sumCurrent) + " activity-" + U.many],
       ["Handoffs", String(m.handoffs), m.crossOrgHandoffs + " cross-org · " + m.orgBoundaries + " org boundaries"],
       ["Approval gates", String(m.gates), m.milestones + " milestone" + (m.milestones === 1 ? "" : "s")],
-      ["Waiting time", fmt(m.waitingCurrent) + u, fmt(m.waitingExcess) + u + " removable"],
+      ["Waiting time", U.f(m.waitingCurrent) + u, U.f(m.waitingExcess) + u + " removable"],
       ["Activities", String(m.activities), m.wasteActivities + " carry a waste type"]
     ];
     const box = $("#metrics");
@@ -352,8 +356,8 @@
     const total = m.sumExcess || 1;
     const bar = h("div", { class: "breakdown" });
     const entries = Object.entries(m.byFamily).filter(([, v]) => v.excess > 0).sort((a, b) => b[1].excess - a[1].excess);
-    entries.forEach(([f, v]) => bar.appendChild(h("div", { class: "seg", style: "width:" + (v.excess / total * 100) + "%;background:" + safeColor(fams[f] && fams[f].optimal), title: (fams[f] ? fams[f].label : f) + ": " + fmt(v.excess) + " " + units().abbr + " removable" })));
-    const legend = h("div", { class: "breakdown-legend" }, entries.map(([f, v]) => h("span", null, h("i", { style: "background:" + safeColor(fams[f] && fams[f].optimal) }), (fams[f] ? fams[f].label : f) + " " + fmt(v.excess) + units().abbr)));
+    entries.forEach(([f, v]) => bar.appendChild(h("div", { class: "seg", style: "width:" + (v.excess / total * 100) + "%;background:" + safeColor(fams[f] && fams[f].optimal), title: (fams[f] ? fams[f].label : f) + ": " + units().f(v.excess) + " " + units().abbr + " removable" })));
+    const legend = h("div", { class: "breakdown-legend" }, entries.map(([f, v]) => h("span", null, h("i", { style: "background:" + safeColor(fams[f] && fams[f].optimal) }), (fams[f] ? fams[f].label : f) + " " + units().f(v.excess) + units().abbr)));
     box.appendChild(h("div", { class: "breakdown-wrap" }, h("div", { class: "tile-label" }, "Where the removable time sits"), bar, legend));
   }
 
@@ -375,7 +379,7 @@
       },
         h("i", { style: "background:" + safeColor(it.color && it.color.optimal) }),
         h("b", null, it.code), h("span", null, it.label),
-        h("em", null, stat ? stat.count + " · " + fmt(stat.excess) + units().abbr : "0"));
+        h("em", null, stat ? stat.count + " · " + units().f(stat.excess) + units().abbr : "0"));
       box.appendChild(chip);
     });
   }
@@ -477,7 +481,7 @@
     box.appendChild(h("div", { class: "control-group" }, "Result"));
     box.appendChild(h("div", { class: "summary-line" },
       model.nodes.length + " of " + total + " tasks included · " + model.metrics.gates + " gates · " +
-      fmt(model.metrics.currentElapsed) + " " + U.abbr));
+      U.f(model.metrics.currentElapsed) + " " + U.abbr));
     box.appendChild(h("button", { type: "button", class: "ghost", onclick: () => openDrawer("included") }, "Why these tasks?"));
   }
 
@@ -574,13 +578,13 @@
       try { VSM.runs.save(run); } catch (e) { toast("Not saved: " + e.message, true); return; }
       name.value = "";
       renderRuns();
-      toast("Saved \u201c" + run.name + "\u201d (" + run.totals.tasks + " tasks, " + fmt(run.totals.elapsed) + " " + units().abbr + ")");
+      toast("Saved \u201c" + run.name + "\u201d (" + run.totals.tasks + " tasks, " + units().f(run.totals.elapsed) + " " + units().abbr + ")");
     } }, "Save");
     box.appendChild(h("div", { class: "run-save" }, name, saveBtn));
     VSM.runs.list().slice().reverse().forEach(r => {
       const row = h("div", { class: "run-row" },
         h("span", { class: "run-name", title: r.createdUtc }, r.name),
-        h("em", null, r.totals.tasks + " · " + fmt(r.totals.elapsed) + units().abbr),
+        h("em", null, r.totals.tasks + " · " + units().f(r.totals.elapsed) + units().abbr),
         h("button", { type: "button", class: "ghost dc-btn", onclick: () => loadRun(r) }, "Load"),
         h("button", { type: "button", class: "ghost dc-btn", onclick: () => compareRun(r) }, "Compare"),
         h("button", { type: "button", class: "icon", title: "Delete", onclick: () => {
@@ -610,7 +614,7 @@
     const body = h("div", { class: "overlay-body" });
     const U = units();
     body.appendChild(h("p", null, "\u201c" + r.name + "\u201d \u2192 current: " +
-      (df.elapsedDelta >= 0 ? "+" : "") + fmt(df.elapsedDelta) + " " + U.abbr + " elapsed, " +
+      (df.elapsedDelta >= 0 ? "+" : "") + U.f(df.elapsedDelta) + " " + U.abbr + " elapsed, " +
       (df.gatesDelta >= 0 ? "+" : "") + df.gatesDelta + " gates."));
     const nameOf = id => { const x = (data.process.activities || []).find(q => q.id === id); return x ? x.name : id; };
     const listBlock = (title, ids) => {
@@ -868,8 +872,20 @@
     });
   }
 
+  /* name the data's own unit, so "auto" says what it will show - an import
+     can change it without the controls being rebound */
+  function labelTimeUnit() {
+    const tu = $("#opt-time-unit");
+    if (tu && tu.options && tu.options[0] && data) tu.options[0].textContent = "The data's own unit (" + VSM.units.resolve(data.process).many + ")";
+  }
   function bindDisplayControls() {
     const d = state.display;
+    const tu = $("#opt-time-unit");
+    if (tu) {
+      labelTimeUnit();
+      tu.value = d.timeUnit || "auto";
+      tu.onchange = e => { d.timeUnit = e.target.value; rebuild(); };
+    }
     $("#opt-links").value = d.links;
     $("#opt-links").onchange = e => { d.links = e.target.value; rebuild(); };
     $("#opt-density").value = d.density;
@@ -932,10 +948,10 @@
     const rows = [
       ["Owner", esc(n.team.label) + (n.team.org ? " (" + esc(n.team.org) + ")" : "")],
       ["Type", esc(kind) + (n.isGate ? " · gate" : "")],
-      ["Current", fmt(d.current) + " " + units().abbr + "  (" + fmt(n.cur.start) + " → " + fmt(n.cur.end) + ")"],
-      ["Optimal", fmt(d.optimal) + " " + units().abbr],
-      ["Removable", fmt(d.excess) + " " + units().abbr + (d.current ? " (" + pct(d.excess / d.current) + ")" : "")],
-      ["Float", n.critical ? "0 (critical path)" : fmt(n.cur.float) + " " + units().abbr]
+      ["Current", units().f(d.current) + " " + units().abbr + "  (" + units().f(n.cur.start) + " → " + units().f(n.cur.end) + ")"],
+      ["Optimal", units().f(d.optimal) + " " + units().abbr],
+      ["Removable", units().f(d.excess) + " " + units().abbr + (d.current ? " (" + pct(d.excess / d.current) + ")" : "")],
+      ["Float", n.critical ? "0 (critical path)" : units().f(n.cur.float) + " " + units().abbr]
     ];
     /* Why this row is in the current scenario - the lowest-friction path to
        explainability. Prefers the workbook's own TriggerExplanation when a
@@ -1008,13 +1024,13 @@
     add("Waste type", n.wasteDef ? n.wasteDef.label + " — " + (n.wasteDef.description || "") : "none");
     const stRow = VSM.progress.statusOf(a);
     if (stRow.explicit) add("Status", (VSM.progress.STATUSES.find(s => s.id === stRow.id) || {}).label + (stRow.id === "doing" ? " (" + Math.round(stRow.fraction * 100) + "%)" : "") + (stRow.note ? " — " + stRow.note : ""));
-    const un = data.process.units || "business days", ab = units().abbr;
-    add("Current duration", fmt(d.current) + " " + un + "  (" + fmt(n.cur.start) + " → " + fmt(n.cur.end) + ")");
-    if (a.time) add("Lead / cycle", fmt(a.time.leadCurrent) + " " + ab + " waiting + " + fmt(a.time.cycleCurrent) + " " + ab + " hands-on  ·  flow efficiency " + pct(d.current ? a.time.cycleCurrent / d.current : 0));
-    add("Optimal duration", fmt(d.optimal) + " " + un);
-    add("Removable", fmt(d.excess) + " " + un + (d.current ? " (" + pct(d.excess / d.current) + ")" : ""));
-    add("Float", n.critical ? "0 — on the critical path" : fmt(n.cur.float) + " " + un);
-    add("Optimal schedule", fmt(n.opt.start) + " → " + fmt(n.opt.end));
+    const UU = units(), un = UU.many, ab = UU.abbr, uf = UU.f;
+    add("Current duration", uf(d.current) + " " + un + "  (" + uf(n.cur.start) + " → " + uf(n.cur.end) + ")");
+    if (a.time) add("Lead / cycle", uf(a.time.leadCurrent) + " " + ab + " waiting + " + uf(a.time.cycleCurrent) + " " + ab + " hands-on  ·  flow efficiency " + pct(d.current ? a.time.cycleCurrent / d.current : 0));
+    add("Optimal duration", uf(d.optimal) + " " + un);
+    add("Removable", uf(d.excess) + " " + un + (d.current ? " (" + pct(d.excess / d.current) + ")" : ""));
+    add("Float", n.critical ? "0 — on the critical path" : uf(n.cur.float) + " " + un);
+    add("Optimal schedule", uf(n.opt.start) + " → " + uf(n.opt.end));
     add("Predecessors", preds.length ? preds.join(", ") : "none (starts at zero)");
     add("Successors", succs.length ? succs.join(", ") : "none");
     add("Handoffs in", n.hasHandoff ? n.handoffsIn.map(x => x.fromTeam.label + " → " + x.toTeam.label + (x.crossOrg ? " (cross-org)" : "") + (x.explicit ? " (declared in JSON)" : " (owner change)")).join("; ") : "none");
@@ -1196,7 +1212,7 @@
     if (!presenting) {
       // exports always use the 16:9 presentation composition
       if (state.view === "tracker") {
-        return VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), theme: state.theme, scenarioSummary: scenarioSummary() });
+        return VSM.progressRender.draw(model, track, { layout: VSM.progressRender.presentation(), display: state.display, theme: state.theme, scenarioSummary: scenarioSummary() });
       }
       const L = VSM.layout.presentation(model.nodes.length, { showMetrics: state.display.presentMetrics, columns: state.display.presentColumns });
       return VSM.render.draw(model, { layout: L, view: state.view, display: state.display, filters: filtersForRender(), scenarioSummary: scenarioSummary(), theme: state.theme });

@@ -33,6 +33,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .title-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .app-version { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 7px; vertical-align: 2px; white-space: nowrap; }
 .stale-data { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 4px; padding: 9px 12px; border: 1px solid #F59E0B; border-radius: 8px; background: rgba(245,158,11,0.10); font-size: 12.5px; }
+.stale-data[hidden] { display: none; }   /* the flex rule above would otherwise override [hidden] (1.6.1 showed an empty bar) */
 .stale-data .stale-text { flex: 1 1 320px; }
 .stale-data .stale-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .views { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
