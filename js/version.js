@@ -17,7 +17,7 @@
    ========================================================================== */
 (function (root) {
   const VSM = root.VSM = root.VSM || {};
-  const VERSION = "1.6.1";
+  const VERSION = "1.6.2";
   const PARTS = ["process", "taxonomy", "scenario"];
 
   /* FNV-1a over the JSON text: stable, dependency-free, and enough to tell

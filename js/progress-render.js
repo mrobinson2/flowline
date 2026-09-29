@@ -84,7 +84,7 @@ VSM.progressRender = (function () {
       return s + "…";
     }
 
-    const U = (VSM.units && VSM.units.resolve(model.process, { fmt })) || { abbr: "d", many: "days", secondary: null };
+    const U = (VSM.units && VSM.units.resolve(model.process, { fmt, display: opts && opts.display && opts.display.timeUnit })) || { abbr: "d", many: "days", secondary: null, f: fmt };
     const health = HEALTH[P.health] || HEALTH["not-started"];
     const c = P.counts;
 
@@ -93,7 +93,7 @@ VSM.progressRender = (function () {
       "font-family": FONT, "data-mode": L.mode, role: "img",
       "aria-label": "Project tracker. " + pctText(P.pct) + " complete by duration. "
         + c.done + " of " + c.total + " activities done, " + c.doing + " in progress, " + c.blocked + " blocked."
-        + (P.remaining !== null ? " Remaining critical path " + fmt(P.remaining) + " " + U.many + "." : "")
+        + (P.remaining !== null ? " Remaining critical path " + U.f(P.remaining) + " " + U.many + "." : "")
     });
     svg.style.fontFamily = FONT;
     svg.style.display = "block";
@@ -234,7 +234,7 @@ VSM.progressRender = (function () {
       if (p.remaining) {
         const remY = y + Math.round(24 * L.s);
         if (P.remaining !== null) {
-          text(svg, px + 16, remY + L.panelValueFont + 8, fmt(P.remaining) + " " + U.abbr, { fill: T.text, "font-size": L.panelValueFont, "font-weight": 700 });
+          text(svg, px + 16, remY + L.panelValueFont + 8, U.f(P.remaining) + " " + U.abbr, { fill: T.text, "font-size": L.panelValueFont, "font-weight": 700 });
           const human = U.secondary ? U.secondary(P.remaining) : null;
           if (human) text(svg, px + 16, remY + L.panelValueFont + L.panelFont + 16, "≈ " + human, { fill: T.text2, "font-size": L.panelFont });
           text(svg, px + 16, remY + L.panelValueFont + L.panelFont * 2 + 24, "critical path of unfinished work", { fill: T.muted, "font-size": L.panelHeadFont });

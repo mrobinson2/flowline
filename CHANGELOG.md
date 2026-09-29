@@ -1,3 +1,40 @@
+# Flowline 1.6.2
+
+Prepared 29 September 2026 from 1.6.1.
+
+## Added
+
+1. **A days/hours switch.** **Options → Show times in** offers the data's own unit, business days, or hours. The shipped sample is in business days and a workbook imported from Excel is in hours, so loading the sample workbook used to turn every figure into hours with no way back short of discarding the data. The switch changes only how times are written:
+   - The figures that follow it are the metric cards, the removable-time bar, the waste chips, the result line, saved and compared scenarios, tooltips, the details panel, the chart axis and row columns, the presentation strip, and the Tracker panel.
+   - Nothing underneath changes. The model is never rescaled, and the data, saved scenarios, workbook and JSON exports keep their own unit.
+   - A slide says which unit it shows, for example "Durations in business days (data in hours)".
+   - The edit form stays in the data's unit, because that is what it edits, and says so.
+   - The conversion uses the data's `hoursPerDay` (8 by default).
+
+## Fixed
+
+2. **An empty orange bar above the metrics.** The 1.6.1 saved-data notice set `display: flex`, which overrides the `hidden` attribute, so every visitor saw its empty frame. A new regression checks that no element the page hides has a display rule without a matching `[hidden]` rule. It failed on this bug before the fix.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     104 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (615 KB)
+```
+
+Browser-verified in Chrome:
+- The sample workbook reads 4,574 h and switches to 571.8 d, with "Business day 571.8" on the axis. The model stays at 4,574 hours.
+- The Tracker panel and the presentation header follow the switch.
+- The shipped sample shows as 1,584 h and back to 198 d.
+- The choice persists across reloads.
+- The saved-data notice's frame no longer shows when there is nothing to say.
+
+---
+
 # Flowline 1.6.1
 
 Prepared 29 September 2026 from 1.6.0. After 1.6.0, a user reported that choosing options still changed nothing, and there was no way to see which version was running. On the released code every option does change the map. The likely cause is a copy of data saved in the browser before the upgrade, which keeps hiding the new sample with nothing on screen to say so. This release makes that visible.

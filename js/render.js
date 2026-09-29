@@ -180,8 +180,8 @@ VSM.render = (function () {
     /* The axis is drawn in whatever unit the data is in. See js/units.js - the
        shipped data is in business days, the source workbook is in hours, and
        labelling one as the other would be wrong by a factor of eight. */
-    const U = (VSM.units && VSM.units.resolve(model.process, { fmt })) ||
-      { tickSize: 5, tickLabel: i => "Wk " + i, originLabel: "Day 0", endLabel: t => "Day " + fmt(t), abbr: "d", many: "days", secondary: null };
+    const U = (VSM.units && VSM.units.resolve(model.process, { fmt, display: opts.display && opts.display.timeUnit })) ||
+      { tickSize: 5, tickLabel: i => "Wk " + i, originLabel: "Day 0", endLabel: t => "Day " + fmt(t), abbr: "d", many: "days", secondary: null, f: fmt };
     const tickPx = U.tickSize * pxPerDay;
     /* thin the labels out until they stop colliding, then thin the gridlines
        themselves once even those would be closer than three pixels */
@@ -292,13 +292,13 @@ VSM.render = (function () {
         tabindex: L.mode === "interactive" ? 0 : null,
         role: L.mode === "interactive" ? "button" : null,
         "aria-label": n.name + ". " + n.team.label + ". " + kindLabel + ". "
-          + fmt(n.duration.current) + " " + U.many + " current, " + fmt(n.duration.optimal) + " necessary, "
-          + fmt(n.duration.excess) + " removable."
+          + U.f(n.duration.current) + " " + U.many + " current, " + U.f(n.duration.optimal) + " necessary, "
+          + U.f(n.duration.excess) + " removable."
           + (n.hasHandoff ? " Receives " + n.handoffsIn.length + " handoff" + (n.handoffsIn.length === 1 ? "" : "s") + "." : "")
       }, g);
       // native tooltip: survives into the exported SVG, and covers labels shortened with an ellipsis
       const tipLines = [n.name, n.team.label + " · " + kindLabel,
-        "Current " + fmt(n.duration.current) + " · necessary " + fmt(n.duration.optimal) + " · removable " + fmt(n.duration.excess),
+        "Current " + U.f(n.duration.current) + " · necessary " + U.f(n.duration.optimal) + " · removable " + U.f(n.duration.excess),
         n.act.description || ""].filter(Boolean);
       el("title", null, rowG).textContent = tipLines.join("\n");
       // hit area (removed on export)
@@ -418,7 +418,7 @@ VSM.render = (function () {
         const ownerText = truncate(ownerName, cf, L.ownerW - 6);
         if (ownerText) text(rowG, ownerX, G.y + 0.5, ownerText, { fill: colFill, "font-size": cf, "dominant-baseline": "middle" });
         // exact values, so a bar too small to read still reports its numbers
-        const dur = fmt(n.duration.current) + " / " + fmt(n.duration.optimal) + " / " + fmt(n.duration.excess);
+        const dur = U.f(n.duration.current) + " / " + U.f(n.duration.optimal) + " / " + U.f(n.duration.excess);
         text(rowG, fullRight, G.y + 0.5, dur, {
           fill: n.duration.excess > 0 && !n.dim ? T.text : colFill, "font-size": cf, "font-family": MONO,
           "text-anchor": "end", "dominant-baseline": "middle"
@@ -450,7 +450,12 @@ VSM.render = (function () {
   function drawHeader(svg, model, opts, L, T) {
     const y = L.margin;
     text(svg, L.margin, y + 28, opts.title || model.process.title || "Value Stream", { fill: T.text, "font-size": L.titleFont, "font-weight": 600 });
-    const meta = [model.process.units ? "Durations in " + model.process.units : null, model.process.version ? "Data " + model.process.version : null].filter(Boolean).join("  ·  ");
+    /* the unit shown, and the data's own when the viewer switched it */
+    const shownU = VSM.units ? VSM.units.resolve(model.process, { display: opts.display && opts.display.timeUnit }) : null;
+    const durations = !model.process.units ? null
+      : shownU && shownU.sourceId ? "Durations in " + shownU.many + " (data in " + model.process.units + ")"
+      : "Durations in " + model.process.units;
+    const meta = [durations, model.process.version ? "Data " + model.process.version : null].filter(Boolean).join("  ·  ");
     const metaW = meta ? measure(meta, 12) + 40 : 0;
     const subW = L.width - 2 * L.margin - metaW;
     let sub = [model.process.subtitle, opts.scenarioSummary].filter(Boolean).join("   ·   ");
@@ -466,17 +471,17 @@ VSM.render = (function () {
 
   function drawMetrics(svg, model, opts, L, T) {
     const m = model.metrics;
-    const U = (VSM.units && VSM.units.resolve(model.process, { fmt })) || { abbr: "d", many: "days", secondary: null };
+    const U = (VSM.units && VSM.units.resolve(model.process, { fmt, display: opts.display && opts.display.timeUnit })) || { abbr: "d", many: "days", secondary: null, f: fmt };
     const u = " " + U.abbr;
     const also = v => U.secondary ? " (" + U.secondary(v) + ")" : "";
     const tiles = [
-      { label: "Current elapsed", value: fmt(m.currentElapsed) + u, sub: "end-to-end today" + also(m.currentElapsed) },
-      { label: "Optimal elapsed", value: fmt(m.optimalElapsed) + u, sub: "if every step ran at its minimum" + also(m.optimalElapsed) },
-      { label: "Removable elapsed", value: fmt(m.removableElapsed) + u, sub: pct(m.removablePct) + " of the current path", accent: true },
-      { label: "Excess inside activities", value: fmt(m.sumExcess) + u, sub: "of " + fmt(m.sumCurrent) + " activity-" + U.many + " (" + pct(m.sumCurrent ? m.sumExcess / m.sumCurrent : 0) + ")" },
+      { label: "Current elapsed", value: U.f(m.currentElapsed) + u, sub: "end-to-end today" + also(m.currentElapsed) },
+      { label: "Optimal elapsed", value: U.f(m.optimalElapsed) + u, sub: "if every step ran at its minimum" + also(m.optimalElapsed) },
+      { label: "Removable elapsed", value: U.f(m.removableElapsed) + u, sub: pct(m.removablePct) + " of the current path", accent: true },
+      { label: "Excess inside activities", value: U.f(m.sumExcess) + u, sub: "of " + U.f(m.sumCurrent) + " activity-" + U.many + " (" + pct(m.sumCurrent ? m.sumExcess / m.sumCurrent : 0) + ")" },
       { label: "Handoffs", value: String(m.handoffs), sub: m.crossOrgHandoffs + " cross-org · " + m.orgBoundaries + " org boundaries" },
       { label: "Approval gates", value: String(m.gates), sub: m.milestones + " milestone" + (m.milestones === 1 ? "" : "s") },
-      { label: "Waiting time", value: fmt(m.waitingCurrent) + u, sub: fmt(m.waitingExcess) + u + " removable" }
+      { label: "Waiting time", value: U.f(m.waitingCurrent) + u, sub: U.f(m.waitingExcess) + u + " removable" }
     ];
     const top = L.margin + L.headerH, h = L.metricsH - 10, w = (L.width - 2 * L.margin) / tiles.length;
     el("rect", { x: L.margin, y: top, width: L.width - 2 * L.margin, height: h, rx: 8, fill: T.panel, stroke: T.panelLine }, svg);
