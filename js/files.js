@@ -129,7 +129,11 @@ VSM.files = (function () {
     for (const kind of Object.keys(FILES)) {
       let handle;
       try { handle = await dir.getFileHandle(FILES[kind]); }
-      catch (e) { if (kind === "process") throw new Error("No " + FILES.process + " in that folder."); continue; }
+      catch (e) {
+        if (e.name !== "NotFoundError") throw e;
+        if (kind === "process") throw new Error("No " + FILES.process + " in that folder.");
+        continue;
+      }
       const file = await handle.getFile();
       if (file.size > 8 * 1024 * 1024) throw new Error(FILES[kind] + " is larger than 8 MB.");
       out[kind] = unwrap(await file.text(), FILES[kind]);
@@ -173,7 +177,11 @@ VSM.files = (function () {
       if (!data[kind]) continue;
       const text = wrap(kind, data[kind], note);
       let current = null;
-      try { current = await (await (await state.dir.getFileHandle(FILES[kind])).getFile()).text(); } catch (e) { /* new file */ }
+      try { current = await (await (await state.dir.getFileHandle(FILES[kind])).getFile()).text(); }
+      catch (e) {
+        if (e.name !== "NotFoundError") throw new Error("Could not read " + FILES[kind] + ": " + e.message);
+        /* A missing file will be created after all reads have succeeded. */
+      }
       // ignore the generated date line when deciding whether anything really changed
       const strip = t => String(t || "").replace(/^\/\*[\s\S]*?\*\/\n/, "");
       if (current !== null && strip(current) === strip(text)) continue;

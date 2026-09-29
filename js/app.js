@@ -1067,9 +1067,9 @@
     form.appendChild(h("h3", null, "Edit activity"));
     form.appendChild(field("Name", h("input", { name: "name", class: "input", value: a.name || "" })));
     form.appendChild(h("div", { class: "edit-row" },
-      field("Current (" + unitName + ")", h("input", { name: "current", class: "input", type: "number", step: "0.5", min: "0", value: a.duration ? a.duration.current : 0 })),
-      field("Optimal (" + unitName + ")", h("input", { name: "optimal", class: "input", type: "number", step: "0.5", min: "0", value: a.duration ? a.duration.optimal : 0 }))));
-    form.appendChild(h("div", { class: "edit-row" }, field("Owner", sel("owner", teams, a.owner)), field("Phase", sel("phase", phases, a.phase))));
+      field("Current (" + unitName + ")", h("input", { name: "current", class: "input", type: "number", step: "any", min: "0", value: a.duration ? a.duration.current : 0 })),
+      field("Optimal (" + unitName + ")", h("input", { name: "optimal", class: "input", type: "number", step: "any", min: "0", value: a.duration ? a.duration.optimal : 0 }))));
+    form.appendChild(h("div", { class: "edit-row" }, field("Owner", sel("owner", teams, a.owner, true)), field("Phase", sel("phase", phases, a.phase, true))));
     form.appendChild(h("div", { class: "edit-row" }, field("Category", sel("category", cats, a.category)), field("Waste type", sel("waste", wastes, a.waste, true))));
     form.appendChild(field("Predecessors (ids, ; separated)", h("input", { name: "predecessors", class: "input", value: (a.predecessors || []).join("; ") })));
     form.appendChild(field("Notes", h("textarea", { name: "notes", class: "input", rows: 2 }, a.notes || "")));
@@ -1283,13 +1283,15 @@
     return false;
   }
 
-  async function loadSourceWorkbook(file, sheets) {
-    const r = VSM.import.fromSheets(sheets, { source: file.name });
+  async function loadSourceWorkbook(file, sheets, opts) {
+    const merge = !!(opts && opts.merge);
+    const r = VSM.import.fromSheets(sheets, { source: file.name, mergeInto: merge ? data : undefined });
     if (r.report.errors.length) { toast("Could not import " + file.name + ": " + r.report.errors[0], true); return; }
     const issues = VSM.validate.run(r.process, r.taxonomy, r.scenario);
     if (issues.errors.length) { renderIssues(issues); toast("Could not import " + file.name + ": " + issues.errors[0], true); return; }
     const c = r.report.counts, t = r.report.totals;
-    const lines = [
+    const lines = merge ? ["Apply " + file.name + "?", "",
+      r.report.merge.updated + " activities updated, " + r.report.merge.added + " added. Pasted rows merge in; nothing is removed."] : [
       "Import " + file.name + "?", "",
       "This replaces the whole data set: activities, teams, phases, the waste taxonomy and the scenario switches.", "",
       c.tasks + " tasks · " + c.phases + " phases · " + c.teams + " teams",
@@ -1340,7 +1342,7 @@
      complete list would delete everything not pasted. Pasted rows therefore
      update and add, never remove. */
   async function importSheets(sheets, file, opts) {
-    if (sheets && looksLikeSourceWorkbook(sheets)) return loadSourceWorkbook(file, sheets);
+    if (sheets && looksLikeSourceWorkbook(sheets)) return loadSourceWorkbook(file, sheets, opts);
     const merge = !!(opts && opts.merge);
     try {
       const r = await VSM.table.importFile(file, data.process, sheets);
@@ -1385,10 +1387,8 @@
       try {
         const obj = JSON.parse(reader.result);
         const override = pinLiveData(readOverride());
-        if (Array.isArray(obj.runs)) {
-          try { VSM.runs.replaceAll(obj.runs); } catch (e2) { toast("Saved scenarios not restored: " + e2.message, true); }
-          delete obj.runs;
-        }
+        const runs = Array.isArray(obj.runs) ? obj.runs : null;
+        delete obj.runs;
         if (obj.process || obj.taxonomy || obj.scenario) Object.assign(override, obj);
         else if (obj.activities) override.process = obj;
         else if (obj.families) override.taxonomy = obj;
@@ -1410,7 +1410,15 @@
         /* Only claim success if init() actually accepted the data; toast()
            writes one shared element, so an unconditional success message here
            would paint over the error init() just raised. */
-        if (init()) toast("Loaded " + file.name);
+        if (!init()) return;
+        if (runs) {
+          try { VSM.runs.replaceAll(runs); renderRuns(); }
+          catch (e2) {
+            toast("Loaded " + file.name + ", but saved scenarios were not restored: " + e2.message, true);
+            return;
+          }
+        }
+        toast("Loaded " + file.name);
       } catch (e) { toast("Could not load JSON: " + e.message, true); }
     };
     reader.readAsText(file);
@@ -1534,9 +1542,8 @@
       if (document.querySelector(".overlay")) return;         // a dialog owns its own paste
       const txt = e.clipboardData && e.clipboardData.getData ? e.clipboardData.getData("text/plain") : "";
       if (!txt || txt.indexOf("\n") < 0) return;              // one line is not a table
-      const matrix = txt.indexOf("\t") >= 0
-        ? txt.replace(/\r/g, "").split("\n").map(l => l.split("\t")).filter(r => r.some(v => String(v).trim() !== ""))
-        : VSM.table.parseCSV(txt);
+      const delimiter = txt.slice(0, txt.indexOf("\n")).includes("\t") ? "\t" : ",";
+      const matrix = VSM.table.parseCSV(txt, delimiter);
       if (matrix.length < 2) return;
       const heads = matrix[0].map(x => String(x || "").trim().toLowerCase());
       if (!heads.includes("id")) { toast("Pasted table not recognised: the first row must be headers including 'id' (see the starter template in Export)", true); return; }

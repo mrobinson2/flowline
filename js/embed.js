@@ -42,8 +42,8 @@
 
   /* Resolve the scenario the way the app does: start from the declared
      defaults, lay a profile over the top, lay explicit overrides over that,
-     follow any toggle implications, then neutralise controls their own
-     enabledWhen rule has switched off. Same order every time, so the answer
+     neutralise hidden and disabled controls, then follow toggle implications
+     as the scheduler does. Same order every time, so the answer
      never depends on how the host got here. */
   function resolveScenario(cfg, profileId, overrides) {
     const attrs = (cfg && cfg.attributes) || [];
@@ -54,13 +54,8 @@
       if (p) s = Object.assign(s, VSM.deepClone(p.set || p.values || {}));
     }
     if (overrides) s = Object.assign(s, VSM.deepClone(overrides));
+    s = VSM.rules.effective(attrs, s, named);
     if (VSM.rules.applyImplications) s = VSM.rules.applyImplications(attrs, s);
-    attrs.forEach(a => {
-      if (!VSM.rules.isEnabled(a, s, named)) {
-        s[a.id] = a.disabledValue !== undefined ? a.disabledValue
-          : a.type === "boolean" ? false : a.type === "multi" ? [] : s[a.id];
-      }
-    });
     return s;
   }
 
@@ -85,19 +80,21 @@
   function create(container, options) {
     if (!container) throw new Error("VSM.embed.create needs a container element");
     const opts = Object.assign({}, DEFAULTS, options || {});
-    const data = opts.data || {
+    let data = opts.data || {
       process: VSM.data.process, taxonomy: VSM.data.taxonomy, scenario: VSM.data.scenario
     };
-    if (!data.process) throw new Error("No process data. Pass { data: { process, taxonomy, scenario } }.");
-
     /* The same validation gate the app uses. A host embedding this should be
        told its data is broken rather than shown an empty box. */
-    const issues = VSM.validate.run(data.process, data.taxonomy, data.scenario);
-    if (issues.errors.length) {
-      const err = new Error("Invalid data: " + issues.errors[0]);
-      err.issues = issues;
-      throw err;
+    function validateData(next) {
+      if (!next || !next.process) throw new Error("No process data. Pass { data: { process, taxonomy, scenario } }.");
+      const issues = VSM.validate.run(next.process, next.taxonomy, next.scenario);
+      if (issues.errors.length) {
+        const err = new Error("Invalid data: " + issues.errors[0]);
+        err.issues = issues;
+        throw err;
+      }
     }
+    validateData(data);
 
     let current = opts, model = null, svg = null;
 
@@ -168,16 +165,20 @@
 
     render();
 
+    function update(patch) {
+      const next = Object.assign({}, current, patch || {});
+      const nextData = patch && Object.prototype.hasOwnProperty.call(patch, "data") ? patch.data : data;
+      validateData(nextData);
+      current = next;
+      data = nextData;
+      return render();
+    }
+
     return {
       /* change anything and redraw; unspecified options keep their value */
-      update(patch) { current = Object.assign({}, current, patch || {}); return render(); },
+      update,
       /* swap the whole data set, e.g. after the host imports a workbook */
-      setData(next) {
-        const check = VSM.validate.run(next.process, next.taxonomy, next.scenario);
-        if (check.errors.length) { const e = new Error("Invalid data: " + check.errors[0]); e.issues = check; throw e; }
-        data.process = next.process; data.taxonomy = next.taxonomy; data.scenario = next.scenario;
-        return render();
-      },
+      setData(next) { return update({ data: next }); },
       getModel() { return model; },
       getSvg() { return svg; },
       getScenarioOptions() {

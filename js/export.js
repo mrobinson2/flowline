@@ -31,13 +31,16 @@ VSM.exporter = (function () {
       const img = new Image();
       const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(str);
       img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(w * scale);
-        canvas.height = Math.round(h * scale);
-        const ctx = canvas.getContext("2d");
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0, w, h);
-        canvas.toBlob(b => (b ? resolve(b) : reject(new Error("PNG encoding failed"))), "image/png");
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Could not create a canvas for PNG export");
+          ctx.scale(scale, scale);
+          ctx.drawImage(img, 0, 0, w, h);
+          canvas.toBlob(b => (b ? resolve(b) : reject(new Error("PNG encoding failed"))), "image/png");
+        } catch (e) { reject(e); }
       };
       img.onerror = () => reject(new Error("Could not rasterize SVG"));
       img.src = url;

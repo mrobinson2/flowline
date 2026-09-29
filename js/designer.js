@@ -235,10 +235,11 @@ VSM.designer = (function () {
               if (!String(p.label || "").trim()) p.label = p.id;
               if (p.stage && !liveStages.has(p.stage)) delete p.stage;   // no dangling rollups
             });
-            if (!work.stages.length) delete work.stages;
             const r = check();
             if (r.errors.length) return;                       // the issues box says why
-            if (onApply(VSM.deepClone(work)) !== false) close();
+            const candidate = VSM.deepClone(work);
+            if (!candidate.stages.length) delete candidate.stages;
+            if (onApply(candidate) !== false) close();
           }
         }, "Apply changes")));
       check();

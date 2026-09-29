@@ -20,7 +20,11 @@
   function criticalChain(model) {
     if (!model.nodes.length) return [];
     let end = model.nodes[0];
-    model.nodes.forEach(n => { if (n.cur.end > end.cur.end) end = n; });
+    model.nodes.forEach(n => {
+      // A terminal milestone can finish at the same instant as its driver.
+      // Start at the terminal node so zero-duration gates remain in the chain.
+      if (n.cur.end > end.cur.end || (n.cur.end === end.cur.end && end.succs.length && !n.succs.length)) end = n;
+    });
     const chain = [end];
     const byId = model.nodeById;
     const seen = new Set([end.id]);
@@ -41,8 +45,9 @@
   }
 
   function profile(model, opts) {
-    const perDay = (opts && opts.hoursPerDay) || (model.process && model.process.hoursPerDay) || 1;
-    const toDays = v => v / perDay;
+    const process = Object.assign({}, model.process);
+    if (opts && opts.hoursPerDay) process.hoursPerDay = opts.hoursPerDay;
+    const toDays = VSM.units.resolve(process).toDays;
     const chain = criticalChain(model);
     const summed = model.nodes.reduce((s, n) => s + n.duration.current, 0);
     const path = model.metrics.currentElapsed;
@@ -50,8 +55,8 @@
     /* lead vs cycle along the chain only, which is where it actually costs */
     let chainLead = 0, chainCycle = 0, chainUnsplit = 0;
     chain.forEach(n => {
-      const t = n.act && n.act.time;
-      if (t) { chainLead += t.leadCurrent * (n.duration.factor || 1); chainCycle += t.cycleCurrent * (n.duration.factor || 1); }
+      const t = n.act && VSM.schedule.resolveTime(n.act, n.duration);
+      if (t) { chainLead += t.leadCurrent; chainCycle += t.cycleCurrent; }
       else chainUnsplit += n.duration.current;
     });
 
@@ -110,14 +115,15 @@
   /* Nothing waits longer than N days. A service-level commitment on queues,
      which is usually a policy decision rather than a technical one. */
   function capWait(process, maxDays, perDay) {
-    const cap = maxDays * (perDay || 8);
+    const units = VSM.units.resolve(Object.assign({}, process, perDay ? { hoursPerDay: perDay } : {}));
+    const cap = maxDays / units.toDays(1);
     const p = clone(process);
     p.activities.forEach(a => {
       if (!a.time) return;
       if (a.time.leadCurrent > cap) {
         a.time.leadCurrent = cap;
-        a.duration.current = a.time.leadCurrent + a.time.cycleCurrent;
-        if (a.duration.optimal > a.duration.current) a.duration.optimal = a.duration.current;
+        const current = a.time.leadCurrent + a.time.cycleCurrent;
+        VSM.schedule.setDuration(a, { current, optimal: Math.min(a.duration.optimal, current) });
       }
     });
     return p;
@@ -135,8 +141,8 @@
       if (firstSeen.has(g)) {
         if (!a.time) return;
         a.time.leadCurrent = 0;
-        a.duration.current = a.time.cycleCurrent;
-        if (a.duration.optimal > a.duration.current) a.duration.optimal = a.duration.current;
+        const current = a.time.cycleCurrent;
+        VSM.schedule.setDuration(a, { current, optimal: Math.min(a.duration.optimal, current) });
       } else firstSeen.add(g);
     });
     return p;

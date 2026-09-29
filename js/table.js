@@ -129,7 +129,7 @@ VSM.table = (function () {
     rows.forEach(r => lines.push(headers.map(h => csvEscape(r[h])).join(",")));
     return "﻿" + lines.join("\r\n");
   }
-  function parseCSV(text) {
+  function parseCSV(text, delimiter = ",") {
     text = text.replace(/^﻿/, "");
     const rows = []; let row = [], field = "", inQ = false;
     for (let i = 0; i < text.length; i++) {
@@ -138,7 +138,7 @@ VSM.table = (function () {
         if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
         else field += c;
       } else if (c === '"') inQ = true;
-      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === delimiter) { row.push(field); field = ""; }
       else if (c === "\r") { /* skip */ }
       else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
       else field += c;
