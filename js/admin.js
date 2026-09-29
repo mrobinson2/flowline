@@ -124,6 +124,80 @@
     return { rule: mapRefs(c.rule, r => (back.has(r) ? back.get(r) : r)), warnings: c.warnings };
   }
 
+  /* Derivations as one Derivation cell. A boolean derives from one rule;
+     an enum from ORDERED cases, first match wins, then the default:
+
+       custom WHEN architectureDeviation OR newEnterprisePlatform; fast WHEN
+       approvedPatternExists AND patternConforms; ELSE standard
+
+     Cases are split on ";" outside quotes and at the first WHEN outside
+     quotes; WHEN and ELSE are uppercase keywords, like AND/OR. A value that
+     is not a plain word is quoted. */
+  const plainValue = v => /^[A-Za-z0-9_.\-]+$/.test(v) && VSM.expr.KEYWORDS.indexOf(v.toUpperCase()) < 0 && !/^(when|else)$/i.test(v);
+  function derivationToText(derive) {
+    if (!derive) return { text: "", json: false };
+    if (derive.when !== undefined) return ruleToText(derive.when);
+    const val = v => {
+      const s = String(v);
+      if (plainValue(s)) return s;
+      if (s.indexOf('"') >= 0) throw new Error("a value containing double quotes");
+      return '"' + s + '"';
+    };
+    try {
+      const parts = (derive.cases || []).map(c => {
+        const t = ruleToText(c.when);
+        if (t.json) throw new Error("case not expressible");
+        return val(c.value) + " WHEN " + t.text;
+      });
+      if (derive.default !== undefined && derive.default !== null) parts.push("ELSE " + val(derive.default));
+      return { text: parts.join("; "), json: false };
+    } catch (e) { return { text: JSON.stringify(derive), json: true }; }
+  }
+  /* split on sep outside double or single quotes */
+  function splitOutside(text, re) {
+    const out = [];
+    let q = null, start = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === q) q = null; continue; }
+      if (c === '"' || c === "'") { q = c; continue; }
+      const m = re.exec(text.slice(i));
+      if (m && m.index === 0) { out.push(text.slice(start, i)); i += m[0].length - 1; start = i + 1; if (re.once) break; }
+    }
+    out.push(text.slice(start));
+    return out;
+  }
+  const unquote = s => { const t = s.trim(); return /^(["']).*\1$/.test(t) ? t.slice(1, -1) : t; };
+  /* -> derive object; throws with a message naming the case */
+  function textToDerivation(text, attr, attrDefs, ruleIds) {
+    if (attr.type !== "enum") return { when: textToRule(text, attrDefs, ruleIds).rule };
+    const known = new Set((attr.options || []).map(o => o.value));
+    const check = (v, where) => {
+      if (known.size && !known.has(v)) throw new Error(where + ": '" + v + "' is not one of " + attr.id + "'s options (" + [...known].join(", ") + ")");
+      return v;
+    };
+    const out = { cases: [] };
+    const segs = splitOutside(String(text), /^;/).map(x => x.trim()).filter(Boolean);
+    segs.forEach((seg, i) => {
+      const where = "case " + (i + 1);
+      const el = /^ELSE\s+([\s\S]+)$/.exec(seg);
+      if (el) {
+        if (i !== segs.length - 1) throw new Error(where + ": ELSE must be the last case");
+        out.default = check(unquote(el[1]), where);
+        return;
+      }
+      const re = /^\sWHEN\s/; re.once = true;
+      const [lhs, rhs] = splitOutside(" " + seg, re);
+      if (rhs === undefined) throw new Error(where + ": expected '<value> WHEN <condition>' or 'ELSE <value>'");
+      let when;
+      try { when = textToRule(rhs, attrDefs, ruleIds).rule; }
+      catch (e) { throw Object.assign(new Error(where + ": " + e.message), { column: e.column }); }
+      out.cases.push({ when, value: check(unquote(lhs), where) });
+    });
+    if (!out.cases.length) throw new Error("no WHEN cases");
+    return out;
+  }
+
   /* An edited condition is authored text from now on: it is exported as the
      row's Include Expression (which wins over the Scenario Matrix on
      re-import), and the workbook's own phrase and explanation are dropped
@@ -145,6 +219,6 @@
     return scenario.versions;
   }
 
-  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias };
+  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias, derivationToText, textToDerivation };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.admin;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

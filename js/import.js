@@ -209,6 +209,8 @@
       const yes = v => /^(y|yes|true|1|on)$/i.test(txt(v));
       if (num(r.section) !== null) t.section = num(r.section);
       if (txt(r.shownWhen)) t.shownWhenText = txt(r.shownWhen);
+      if (txt(r.enabledWhen)) t.enabledWhenText = txt(r.enabledWhen);
+      if (yes(r.hidden)) t.hidden = true;
       if (yes(r.derived)) t.derived = true;
       if (txt(r.derivation)) t.derivation = txt(r.derivation);
       if (yes(r.required)) t.required = true;
@@ -216,7 +218,16 @@
       if (yes(r.auditRelevant)) t.auditRelevant = true;
       if (type === "enum" || type === "multi") {
         if (!optionList.length) { report.warnings.push("Toggle '" + id + "' is a choice but lists no options; treated as a yes/no switch."); t.type = "boolean"; }
-        else t.options = optionList.map(v => ({ value: v, label: v }));
+        else {
+          /* labels ride in their own column, position for position; a count
+             mismatch is a sheet that was edited out of step - say so */
+          const labels = txt(r.optionLabels) ? txt(r.optionLabels).split(/\s*;\s*/) : null;
+          if (labels && labels.length !== optionList.length) {
+            report.warnings.push("Toggle '" + id + "': Option Labels lists " + labels.length + " labels for " + optionList.length + " options; the values are shown instead.");
+          }
+          const use = labels && labels.length === optionList.length;
+          t.options = optionList.map((v, i) => ({ value: v, label: use && labels[i].trim() ? labels[i].trim() : v }));
+        }
       }
       const def = txt(r.default);
       if (t.type === "boolean") t.default = /^(y|yes|true|1|on)$/i.test(def);
@@ -488,35 +499,12 @@
 
     /* ---- tailoring: the three tabs if present, the Applies When phrases if not */
     const toggles = readToggles(found.toggles, report);
-    /* Shown When compiles against the FULL vocabulary, so it runs after every
-       toggle is read. "Always" (and blank) means always visible; "Diagnostic
-       mode only" is a flag the diagnostic view reads, not a rule. A broken
-       expression warns and the control stays visible - hiding a control over
-       a typo would silently freeze its default into every scenario. */
-    if (toggles) {
-      toggles.forEach(t => {
-        if (!t.shownWhenText) return;
-        const sw = t.shownWhenText;
-        delete t.shownWhenText;
-        if (/^always$/i.test(sw)) return;
-        if (/^diagnostic mode only$/i.test(sw)) { t.diagnosticOnly = true; return; }
-        try { t.shownWhen = VSM.expr.compile(sw, toggles, []).rule; }
-        catch (e) { report.warnings.push("Toggle '" + t.id + "': Shown When: " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". The control stays visible."); }
-      });
-      /* A Derivation cell that happens to parse as the expression grammar
-         becomes live engine logic; anything else stays prose on the
-         attribute (the spec's Derivation column is plain language first).
-         Only booleans: an enum derivation needs ordered cases, which prose
-         cannot carry. Silent on failure by design - prose is not an error. */
-      toggles.forEach(t => {
-        if (!t.derived || !t.derivation || t.type !== "boolean") return;
-        try { t.derive = { when: VSM.expr.compile(t.derivation, toggles, []).rule }; }
-        catch (e) { /* prose derivation: documented, not computed */ }
-      });
-    }
     const profiles = toggles ? readProfiles(found.profiles, toggles, report) : null;
     const matrix = toggles ? readMatrix(found.matrix, toggles, report) : null;
-    if (toggles && !matrix) report.warnings.push("A Toggles tab was found but no usable Scenario Matrix, so no task is tied to any toggle yet.");
+    /* Include Expression ties tasks to toggles too; only a sheet with
+       neither has toggles that decide nothing */
+    if (toggles && !matrix && !taskRows.some(r => txt(r.includeExpression)))
+      report.warnings.push("A Toggles tab was found but no usable Scenario Matrix and no Include Expression, so no task is tied to any toggle yet.");
     if (!toggles && (found.profiles || found.matrix)) report.warnings.push("Profiles or Scenario Matrix found without a Toggles tab. Toggles defines the vocabulary, so both were ignored.");
 
     /* ---- named rules from the Rules sheet: write hard logic once, reference
@@ -548,6 +536,44 @@
       });
     }
     const sheetRuleIds = Object.keys(sheetRules);
+
+    /* Shown When, Enabled When and Derivation compile against the FULL
+       vocabulary and the Rules sheet, so they run after both are read (an
+       R_ reference in a visibility gate used to fail for want of the rule
+       ids). "Always" (and blank) means always visible; "Diagnostic mode
+       only" is a flag the diagnostic view reads, not a rule. A broken gate
+       warns and the control stays visible / enabled - hiding a control over
+       a typo would silently freeze its default into every scenario. */
+    if (toggles) {
+      const gate = (t, text, key, label) => {
+        try { t[key] = VSM.admin.textToRule(text, toggles, sheetRuleIds).rule; }
+        catch (e) { report.warnings.push("Toggle '" + t.id + "': " + label + ": " + e.message + (e.column ? " (column " + e.column + ")" : "") + ". The control stays " + (key === "shownWhen" ? "visible" : "enabled") + "."); }
+      };
+      toggles.forEach(t => {
+        const sw = t.shownWhenText, ew = t.enabledWhenText;
+        delete t.shownWhenText; delete t.enabledWhenText;
+        if (sw && !/^always$/i.test(sw)) {
+          if (/^diagnostic mode only$/i.test(sw)) t.diagnosticOnly = true;
+          else gate(t, sw, "shownWhen", "Shown When");
+        }
+        if (ew && !/^always$/i.test(ew)) gate(t, ew, "enabledWhen", "Enabled When");
+      });
+      /* A Derivation cell that parses becomes live engine logic; anything
+         else stays prose on the attribute (the spec's Derivation column is
+         plain language first). A boolean derives from one expression; a
+         choice from ordered "<value> WHEN <condition>; ...; ELSE <value>"
+         cases. Prose failing to parse is not an error - but a choice cell
+         written in the case syntax (it has an uppercase WHEN) that fails is
+         a mistake worth hearing about, not documentation. */
+      toggles.forEach(t => {
+        if (!t.derived || !t.derivation || (t.type !== "boolean" && t.type !== "enum")) return;
+        try { t.derive = VSM.admin.textToDerivation(t.derivation, t, toggles, sheetRuleIds); }
+        catch (e) {
+          if (t.type === "enum" && /\bWHEN\b/.test(t.derivation))
+            report.warnings.push("Toggle '" + t.id + "': Derivation: " + e.message + ". Kept as prose; the value is not computed.");
+        }
+      });
+    }
 
     /* ---- scenario switches from the distinct "Applies When" phrases */
     const conditions = new Map();
@@ -853,6 +879,8 @@
           if (t.implies && t.implies.length) a.implies = t.implies;
           if (t.section !== undefined) a.section = t.section;
           if (t.shownWhen !== undefined) a.shownWhen = t.shownWhen;
+          if (t.enabledWhen !== undefined) a.enabledWhen = t.enabledWhen;
+          if (t.hidden) a.hidden = true;
           if (t.diagnosticOnly) a.diagnosticOnly = true;
           if (t.derived) a.derived = true;
           if (t.derivation) a.derivation = t.derivation;
