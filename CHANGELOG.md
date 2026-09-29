@@ -1,3 +1,28 @@
+# Flowline 1.5.1
+
+Prepared 28 September 2026 from 1.5.0. Repository audit fixes for clipboard imports, saved scenarios, embedded charts, duration calculations, and editing/export failures.
+
+## Fixed
+
+- Source-format clipboard rows now merge without deleting unpasted tasks, preserve omitted fields and dependencies, and convert hours to the live process units. Quoted spreadsheet cells retain embedded tabs and newlines.
+- Saved scenarios verify the complete storage read-back, tolerate denied storage reads, and reject malformed records. Invalid JSON imports no longer overwrite saved scenarios; partial restore errors stay visible.
+- Embedded charts accept replacement data without mutating caller-owned datasets, resolve hidden/disabled answers consistently, and load the required modules in the HTML and Backstage examples.
+- Analysis and reconciliation respect hours, days, and weeks. Wait caps and queue changes keep lead/cycle totals consistent, partial duration overrides retain omitted totals, and critical chains include terminal zero-duration gates.
+- Activity editing accepts fractional durations and preserves empty owner/phase assignments. Rejected designer saves leave the editor usable.
+- Linked-folder read failures stop saves before writes, PNG rendering errors reject the export, and validation rejects non-string activity IDs and invalid effective override durations.
+
+## Validation
+
+- Core suite: 213 passed, 0 failed.
+- Expression suite: 13 passed, 0 failed.
+- Regression suite: 100 groups passed, 0 failed.
+- Standalone bundle build and whitespace check passed.
+- Chrome checks covered chart views, tracking persistence, clipboard and activity editing, administrative rule changes, and PNG export.
+
+See [the audit report](docs/CODE-AUDIT.md) for reproductions, coverage, and limitations. The separate v1.6.0 sample-content feature is not part of this patch release.
+
+---
+
 # Flowline 1.5.0
 
 Prepared 28 September 2026 from 1.4.0. Closes the two workbook gaps 1.4.0 named in its Export Notes: nothing in the rule layer is left behind when a scenario set goes out to Excel and comes back. The shipped sample exported and re-imported now includes the same tasks in the default scenario, every preset, and a set of targeted gate, tier and selection scenarios — it matched in none of them before.

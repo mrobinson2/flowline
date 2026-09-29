@@ -428,6 +428,79 @@
   }
 
   /* ------------------------------------------------------------------ main */
+  /* Clipboard rows are a patch to the live dataset. Source cells are hours,
+     but the destination may use days or weeks. Keep unpasted rows and fields,
+     and add referenced definitions without replacing the live vocabulary. */
+  function mergeRows(live, incoming, columns) {
+    const out = VSM.deepClone(live);
+    const has = key => columns[key] !== undefined;
+    const perHour = 1 / (VSM.units.resolve(out.process).toDays(1) * (Number(out.process.hoursPerDay) || S.HOURS_PER_DAY));
+    function definitions(existing, added) {
+      const items = (existing || []).slice(), ids = new Map();
+      added.forEach(item => {
+        const match = items.find(x => x.label === item.label);
+        if (match) { ids.set(item.id, match.id); return; }
+        let id = item.id, suffix = 2;
+        while (items.some(x => x.id === id)) id = item.id + "-" + suffix++;
+        ids.set(item.id, id);
+        items.push(Object.assign({}, item, { id }));
+      });
+      return { items, ids };
+    }
+    const stages = definitions(out.process.stages, incoming.process.stages || []);
+    const phases = definitions(out.process.phases, (incoming.process.phases || []).map(p =>
+      Object.assign({}, p, p.stage ? { stage: stages.ids.get(p.stage) || p.stage } : {})));
+    const teams = definitions(Object.entries(out.process.teams || {}).map(([id, t]) => ({ ...t, id })),
+      Object.entries(incoming.process.teams || {}).map(([id, t]) => ({ ...t, id })));
+    if (stages.items.length) out.process.stages = stages.items;
+    if (phases.items.length) out.process.phases = phases.items;
+    out.process.teams = Object.fromEntries(teams.items.map(({ id, ...t }) => [id, t]));
+    const existing = new Map(out.process.activities.map(a => [a.id, a]));
+    const fields = {
+      phase: ["phase"], owner: ["team"], predecessors: ["preds"],
+      category: ["stepType"], milestone: ["stepType"], handoff: ["stepType"],
+      waste: ["waste"], interaction: ["interaction"], antiPattern: ["interaction"], lane: ["lane"],
+      when: ["includeExpression", "appliesWhen"], whenSource: ["includeExpression", "appliesWhen"], appliesWhen: ["appliesWhen"],
+      notes: ["notes"], pctCA: ["pctCA"], canOverride: ["canOverride"], rulePriority: ["rulePriority"],
+      triggerExplanation: ["triggerExplanation"], defaultIncluded: ["defaultIncluded"]
+    };
+    incoming.process.activities.forEach(row => {
+      const old = existing.get(row.id);
+      const next = old ? Object.assign({}, old) : Object.assign({}, row);
+      next.id = row.id; next.name = row.name;
+      next.duration = Object.fromEntries(Object.entries(row.duration).map(([k, n]) => [k, n * perHour]));
+      next.time = Object.fromEntries(Object.entries(row.time).map(([k, n]) => [k, n * perHour]));
+      if (old && (!has("leadOpt") || !has("cycleOpt"))) {
+        const split = VSM.schedule.resolveTime(old, old.duration);
+        if (!has("leadOpt")) next.time.leadOptimal = split ? split.leadOptimal : old.duration.optimal;
+        if (!has("cycleOpt")) next.time.cycleOptimal = split ? split.cycleOptimal : 0;
+        next.duration.optimal = next.time.leadOptimal + next.time.cycleOptimal;
+      }
+      Object.entries(fields).forEach(([field, keys]) => {
+        if (!keys.some(has)) return;
+        if (row[field] === undefined) delete next[field]; else next[field] = row[field];
+      });
+      if (has("phase") && next.phase) next.phase = phases.ids.get(next.phase) || next.phase;
+      if (has("team") && next.owner) next.owner = teams.ids.get(next.owner) || next.owner;
+      if (row.noEstimate) next.noEstimate = true; else delete next.noEstimate;
+      existing.set(next.id, next);
+    });
+    out.process.activities = [...existing.values()];
+    out.process.version = incoming.process.version;
+    for (const key of ["families", "categories", "wasteTypes", "markers"])
+      out.taxonomy[key] = Object.assign(Object.create(null), incoming.taxonomy[key], out.taxonomy[key]);
+    const known = new Set((out.scenario.attributes || []).map(a => a.id));
+    out.scenario.attributes = (out.scenario.attributes || []).concat(incoming.scenario.attributes.filter(a => !known.has(a.id)));
+    out.scenario.rules = Object.assign(Object.create(null), incoming.scenario.rules, out.scenario.rules);
+    out.report = incoming.report;
+    const oldIds = new Set(live.process.activities.map(a => a.id));
+    out.report.merge = {
+      updated: incoming.process.activities.filter(a => oldIds.has(a.id)).length,
+      added: incoming.process.activities.filter(a => !oldIds.has(a.id)).length
+    };
+    return out;
+  }
+
   function fromSheets(sheets, opts) {
     opts = opts || {};
     const report = { errors: [], warnings: [], notes: [], unmapped: Object.create(null), counts: {}, totals: {}, unconfirmed: S.unconfirmed() };
@@ -536,6 +609,9 @@
       });
     }
     const sheetRuleIds = Object.keys(sheetRules);
+    const compileTask = text => opts.mergeInto
+      ? VSM.admin.textToRule(text, opts.mergeInto.scenario.attributes, Object.keys(opts.mergeInto.scenario.rules || {}))
+      : VSM.expr.compile(text, toggles || undefined, sheetRuleIds);
 
     /* Shown When, Enabled When and Derivation compile against the FULL
        vocabulary and the Rules sheet, so they run after both are read (an
@@ -585,7 +661,7 @@
     const exprCompiles = r => {
       const t = txt(r.includeExpression);
       if (!t) return false;
-      try { VSM.expr.compile(t, toggles || undefined, sheetRuleIds); return true; } catch (e) { return false; }
+      try { compileTask(t); return true; } catch (e) { return false; }
     };
     taskRows.forEach(r => {
       if (exprCompiles(r)) return;
@@ -679,7 +755,7 @@
       const exprText = txt(r.includeExpression);
       if (exprText) {
         try {
-          const c = VSM.expr.compile(exprText, toggles || undefined, sheetRuleIds);
+          const c = compileTask(exprText);
           a.when = c.rule;
           a.whenSource = "expression";
           usedExpression = true;
@@ -787,6 +863,7 @@
     }
     /* predecessors naming rows that are not in the sheet */
     activities.forEach(a => {
+      if (opts.mergeInto) return; // validate all references against the merged dataset below
       const bad = a.predecessors.filter(p => !ids.has(p));
       bad.forEach(p => report.warnings.push(a.id + ": predecessor '" + p + "' does not exist and was dropped."));
       if (bad.length) a.predecessors = a.predecessors.filter(p => ids.has(p));
@@ -978,7 +1055,12 @@
       flowEfficiencyOptimal: leadOpt + cycleOpt ? rnd(100 * cycleOpt / (leadOpt + cycleOpt)) : 0
     };
     report.unmappedList = Object.values(report.unmapped);
-    return { process, taxonomy: buildTaxonomy(), scenario, report };
+    const result = { process, taxonomy: buildTaxonomy(), scenario, report };
+    if (opts.mergeInto) {
+      if (!conditions.size && !toggles) result.scenario.attributes = [];
+      return mergeRows(opts.mergeInto, result, S.matchHeaders(found.tasks.matrix[0], S.TASK).index);
+    }
+    return result;
   }
 
   /* --------------------------------------------------------------- reconcile
@@ -996,21 +1078,21 @@
      Returns { checked, agree, worstDelta, mismatches[], endOurs, endTheirs }
      with everything expressed in DAYS. */
   function reconcile(process, model, tolDays) {
-    const perDay = Number(process.hoursPerDay) || S.HOURS_PER_DAY;
+    const toDays = VSM.units.resolve(process).toDays;
     const tol = tolDays === undefined ? 0.02 : tolDays;
     const out = { checked: 0, agree: 0, worstDelta: 0, mismatches: [], durationMismatches: [] };
     model.nodes.forEach(n => {
       const src = n.act && n.act.source;
       if (!src) return;
       if (src.durationDays !== null && src.durationDays !== undefined) {
-        const ours = n.duration.current / perDay;
+        const ours = toDays(n.duration.current);
         if (Math.abs(ours - src.durationDays) > tol) {
           out.durationMismatches.push({ id: n.id, name: n.name, ours: Math.round(ours * 100) / 100, theirs: src.durationDays });
         }
       }
       if (src.ef === null || src.ef === undefined) return;
       out.checked++;
-      const oursEF = n.cur.end / perDay;
+      const oursEF = toDays(n.cur.end);
       const d = Math.abs(oursEF - src.ef);
       if (d > out.worstDelta) out.worstDelta = Math.round(d * 100) / 100;
       if (d <= tol) out.agree++;
@@ -1025,7 +1107,7 @@
     const ends = model.nodes.map(n => (n.act && n.act.source ? n.act.source.ef : null)).filter(v => v !== null && v !== undefined);
     // reduce, not spread: Math.max(...ends) throws RangeError past ~125k arguments
     out.endTheirs = ends.length ? ends.reduce((m, v) => (v > m ? v : m), -Infinity) : null;
-    out.endOurs = Math.round((model.metrics.currentElapsed / perDay) * 100) / 100;
+    out.endOurs = Math.round(toDays(model.metrics.currentElapsed) * 100) / 100;
     out.mismatchCount = out.checked - out.agree;
 
     /* the critical path each of us found, compared as sets */

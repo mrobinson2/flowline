@@ -316,7 +316,7 @@ VSM.validate = (function () {
     const ids = new Set();
     process.activities.forEach((a, i) => {
       const at = "activity #" + (i + 1) + (a && a.id ? " (" + a.id + ")" : "");
-      if (!a || !ACT_ID.test(String(a.id === undefined || a.id === null ? "" : a.id))) { err(at + ": needs an id with no spaces, semicolons, commas or pipes (those separate predecessor lists)."); return; }
+      if (!a || typeof a.id !== "string" || !ACT_ID.test(a.id)) { err(at + ": needs a string id with no spaces, semicolons, commas or pipes (those separate predecessor lists)."); return; }
       if (ids.has(a.id)) { err(at + ": duplicate activity id. Ids must be unique because predecessors reference them."); return; }
       ids.add(a.id);
       if (typeof a.name !== "string" || !a.name.trim()) err(at + ": name is required.");
@@ -360,8 +360,9 @@ VSM.validate = (function () {
       (a.overrides || []).forEach((o, oi) => {
         const ow = at + " override #" + (oi + 1);
         checkRule(o.when, ow, []);
-        const od = o.duration || {};
-        ["current", "optimal"].forEach(k => { if (od[k] !== undefined && (typeof od[k] !== "number" || od[k] < 0)) err(ow + ": duration." + k + " must be a number of zero or more."); });
+        if (o.duration !== undefined && !object(o.duration)) { err(ow + ": duration must be an object."); return; }
+        const od = Object.assign({}, d, o.duration || {});
+        ["current", "optimal"].forEach(k => { if (typeof od[k] !== "number" || !isFinite(od[k]) || od[k] < 0) err(ow + ": duration." + k + " must be a finite number of zero or more."); });
         if (typeof od.current === "number" && typeof od.optimal === "number" && od.optimal > od.current) err(ow + ": optimal duration is larger than current.");
       });
     });

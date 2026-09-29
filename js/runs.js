@@ -69,34 +69,45 @@
     };
   }
 
+  /* Imported or persisted runs reach both the sidebar and comparison code.
+     Check the fields those readers require before accepting a record. */
+  function validRun(run) {
+    const object = v => !!v && typeof v === "object" && !Array.isArray(v);
+    return object(run) && typeof run.runId === "string" && !!run.runId
+      && typeof run.name === "string"
+      && Array.isArray(run.includedKeys) && run.includedKeys.every(id => typeof id === "string")
+      && object(run.totals) && ["elapsed", "gates", "tasks"].every(k => Number.isFinite(run.totals[k]) && run.totals[k] >= 0)
+      && ["answers", "overrides", "taskOverrides"].every(k => run[k] === undefined || object(run[k]));
+  }
+
   function list() {
-    const st = storage();
-    if (!st) return [];
     try {
+      const st = storage();
+      if (!st) return [];
       const raw = JSON.parse(st.getItem(KEY) || "[]");
-      return Array.isArray(raw) ? raw.filter(r => r && typeof r === "object" && r.runId) : [];
+      return Array.isArray(raw) ? raw.filter(validRun).slice(-CAP) : [];
     } catch (e) { return []; }
   }
 
   function write(runs) {
     const st = storage();
     if (!st) throw new Error("no storage available to keep scenarios in");
-    st.setItem(KEY, JSON.stringify(runs));
-    const back = list();
-    if (back.length !== runs.length) throw new Error("the browser did not keep the saved scenario (storage kept nothing)");
-    return back;
+    if (!Array.isArray(runs) || !runs.every(validRun)) throw new Error("Invalid saved scenario data");
+    const serialized = JSON.stringify(runs.slice(-CAP));
+    st.setItem(KEY, serialized);
+    if (st.getItem(KEY) !== serialized) throw new Error("the browser did not keep the saved scenario (storage returned different data)");
+    return JSON.parse(serialized);
   }
 
   function save(run) {
     const runs = list().filter(r => r.runId !== run.runId);
     runs.push(run);
-    while (runs.length > CAP) runs.shift();
     return write(runs);
   }
 
   function remove(runId) { return write(list().filter(r => r.runId !== runId)); }
 
-  function replaceAll(runs) { return write(Array.isArray(runs) ? runs.filter(r => r && r.runId).slice(-CAP) : []); }
+  function replaceAll(runs) { return write(runs); }
 
   VSM.runs = { record, diff, list, save, remove, replaceAll, storageKey: KEY };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.runs;

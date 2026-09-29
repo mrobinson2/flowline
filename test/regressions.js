@@ -78,7 +78,7 @@ function fakeNode(tag) {
 }
 function appHarness(initial) {
   const storage = new Map(), messages = [], elements = new Map();
-  let refuseStorage = false, dropStorage = false;
+  let refuseStorage = false, dropStorage = false, refuseRunStorage = false;
   const context = vm.createContext({
     VSM: { ...V, render: { fmt: String, pct: String } },
     window: { addEventListener() {}, innerWidth: 1400 },
@@ -91,7 +91,7 @@ function appHarness(initial) {
     localStorage: {
       getItem: key => storage.get(key) || null,
       setItem(key, value) {
-        if (refuseStorage) throw new Error("Storage full");
+        if (refuseStorage || (refuseRunStorage && key === V.runs.storageKey)) throw new Error("Storage full");
         if (dropStorage) return;                 // accepts the write and keeps nothing
         storage.set(key, value);
       },
@@ -101,6 +101,7 @@ function appHarness(initial) {
     FileReader: class { readAsText(file) { this.result = file.content; this.onload(); } },
     record: (message, error) => messages.push({ message, error })
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/runs.js"), "utf8"), context);
   let src = fs.readFileSync(path.join(__dirname, "../js/app.js"), "utf8");
   src = src.replace("  // small public surface", `
     toast = (m, bad) => record(m, bad);
@@ -118,6 +119,7 @@ function appHarness(initial) {
     api, storage, messages,
     el: s => { if (!elements.has(s)) elements.set(s, fakeNode(s)); return elements.get(s); },
     refuseStorage() { refuseStorage = true; },
+    refuseRunStorage() { refuseRunStorage = true; },
     dropStorage() { dropStorage = true; }
   };
 }
@@ -127,6 +129,385 @@ function form(extra = {}) {
 }
 
 (async () => {
+  await test("duration override patches preserve omitted totals and reject invalid effective durations", () => {
+    for (const [patch, expected] of [[{ optimal: 2 }, { current: 8, optimal: 2 }], [{ current: 10 }, { current: 10, optimal: 4 }]]) {
+      const d = dataset([task("A", { overrides: [{ when: true, duration: patch }] })]);
+      assert.deepEqual(V.validate.run(d.process, d.taxonomy, d.scenario).errors, []);
+      const duration = build(d).nodes[0].duration;
+      assert.equal(duration.current, expected.current); assert.equal(duration.optimal, expected.optimal);
+    }
+    for (const patch of [{ current: Infinity }, { optimal: NaN }, { current: 2 }, { optimal: 20 }, "invalid"]) {
+      const d = dataset([task("A", { overrides: [{ when: true, duration: patch }] })]);
+      assert.ok(V.validate.run(d.process, d.taxonomy, d.scenario).errors.some(e => /override.*duration/.test(e)), JSON.stringify(patch));
+    }
+  });
+  await test("activity identifiers must remain strings for DOM selection and dependency lookup", () => {
+    for (const id of [1, true, ["A"], { toString: () => "A" }]) {
+      const d = dataset([task(id)]);
+      d.process.activities[0].name = "A";
+      assert.ok(V.validate.run(d.process, d.taxonomy, d.scenario).errors.some(e => /id/.test(e)), String(id));
+    }
+    const d = dataset([task("1")]);
+    assert.deepEqual(V.validate.run(d.process, d.taxonomy, d.scenario).errors, []);
+  });
+  await test("critical-chain analysis includes terminal zero-duration gates", () => {
+    const a = task("A");
+    const gate = task("gate", { category: "approval", duration: { current: 0, optimal: 0 }, predecessors: ["A"] });
+    for (const acts of [[a, gate], [gate, a]]) {
+      const m = build(dataset(acts));
+      assert.deepEqual(V.analyze.criticalChain(m).map(n => n.id), ["A", "gate"]);
+      assert.equal(V.analyze.profile(m).chainGates, 1);
+    }
+  });
+  await test("PNG rendering failures reject the export instead of leaving it pending", async () => {
+    for (const kind of ["context", "draw", "encode"]) {
+      let img;
+      const canvas = { getContext: () => kind === "context" ? null : {
+        scale() {}, drawImage() { if (kind === "draw") throw new Error("Drawing failed"); }
+      }, toBlob() { throw new Error("Encoding failed"); } };
+      const context = vm.createContext({ VSM: {}, Image: class { constructor() { img = this; } },
+        document: { createElement: () => canvas }, XMLSerializer: class { serializeToString() { return "<svg/>"; } } });
+      vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/export.js"), "utf8"), context);
+      const svg = { cloneNode() { return this; }, querySelectorAll: () => [], setAttribute() {}, getAttribute: () => "0 0 1920 1080" };
+      const pending = context.VSM.exporter.toPNGBlob(svg, 1);
+      const rejected = assert.rejects(pending, /canvas|Drawing failed|Encoding failed/i);
+      assert.doesNotThrow(() => img.onload(), "load handlers must reject their promise on failure");
+      await rejected;
+    }
+  });
+  await test("analysis and workbook reconciliation respect units and resolved duration overrides", () => {
+    for (const [units, scale] of [["hours", 8], ["business days", 1], ["weeks", 0.2]]) {
+      const a = task("A", {
+        duration: { current: 5 * scale, optimal: 2.5 * scale },
+        time: { leadCurrent: 3 * scale, cycleCurrent: 2 * scale, leadOptimal: 1.5 * scale, cycleOptimal: scale },
+        overrides: [{ when: true, duration: { current: 10 * scale, optimal: 5 * scale } }],
+        multipliers: [{ when: true, factor: 1.5 }],
+        source: { durationDays: 15, ef: 15 }
+      });
+      const d = dataset([a]); d.process.units = units;
+      const m = build(d), profile = V.analyze.profile(m, { hoursPerDay: 8 });
+      assert.equal(profile.pathDays, 15, units);
+      assert.equal(profile.chainLeadDays, 9, units);
+      assert.equal(profile.chainCycleDays, 6, units);
+      assert.equal(profile.chainLeadDays + profile.chainCycleDays, profile.pathDays, units);
+      const reconciled = V.import.reconcile(d.process, m);
+      assert.equal(reconciled.endOurs, 15, units);
+      assert.equal(reconciled.mismatchCount, 0, units);
+      assert.deepEqual(reconciled.durationMismatches, [], units);
+    }
+  });
+  await test("wait caps use business days across process units and keep lead-cycle totals consistent", () => {
+    for (const [units, scale] of [["hours", 8], ["business days", 1], ["weeks", 0.2]]) {
+      const p = dataset([task("A", { duration: { current: 5 * scale, optimal: 2.5 * scale },
+        time: { leadCurrent: 3 * scale, cycleCurrent: 2 * scale, leadOptimal: 1.5 * scale, cycleOptimal: scale } })]).process;
+      p.units = units;
+      const capped = V.analyze.capWait(p, 1, 8).activities[0];
+      assert.ok(Math.abs(capped.duration.current - 3 * scale) < 1e-9, units);
+      const zero = V.analyze.capWait(p, 0, 8).activities[0];
+      assert.ok(Math.abs(zero.time.leadOptimal + zero.time.cycleOptimal - zero.duration.optimal) < 1e-9, units);
+      const shared = clone(p); shared.activities.push({ ...clone(shared.activities[0]), id: "B" });
+      const second = V.analyze.mergeQueues(shared, () => "shared queue").activities[1];
+      assert.ok(Math.abs(second.time.leadOptimal + second.time.cycleOptimal - second.duration.optimal) < 1e-9, units);
+      assert.equal(p.activities[0].duration.current, 5 * scale, "what-if must not mutate the source");
+    }
+  });
+  await test("spreadsheet clipboard cells retain embedded newlines, tabs and escaped quotes", () => {
+    const text = 'id\tname\tnotes\r\nA\t"A\tname"\t"First line\nSecond ""quoted"" line"\r\nB\tB\tplain\r\n';
+    assert.deepEqual(V.table.parseCSV(text, "\t"), [
+      ["id", "name", "notes"], ["A", "A\tname", 'First line\nSecond "quoted" line'], ["B", "B", "plain"]
+    ]);
+    assert.deepEqual(V.table.parseCSV('id,name,notes\nA,A,"contains\ta tab"'), [
+      ["id", "name", "notes"], ["A", "A", "contains\ta tab"]
+    ]);
+  });
+  await test("source-format clipboard rows merge without removing tasks or changing dataset units", async () => {
+    const d = dataset([task("A"), task("B", { status: "done", notes: "keep this note" })]);
+    d.process.units = "business days";
+    d.process.title = "Existing process";
+    d.process.phases = [{ id: "existing", label: "Existing phase" }];
+    d.scenario = { attributes: [{ id: "allow", label: "Allow", type: "boolean", default: true }], rules: { go: { allow: true } } };
+    const h = appHarness(d);
+    const sheets = { Pasted: [
+      ["ID", "Task", "Phase", "Assigned Team", "Predecessor IDs", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Optimized Lead Time (hrs)", "Optimized Cycle Time (hrs)", "Include Expression"],
+      ["B", "Updated B", "New phase", "New team", "A", 8, 8, 4, 4, "R_go"],
+      ["C", "Added C", "New phase", "New team", "B", 16, 8, 8, 4, "R_go"]
+    ] };
+    await h.api.importSheets(sheets, { name: "pasted table" }, { merge: true });
+    const next = h.api.getData();
+    assert.deepEqual(clone(next.process.activities.map(a => a.id)), ["A", "B", "C"]);
+    assert.equal(next.process.units, "business days");
+    assert.equal(next.process.title, "Existing process");
+    assert.deepEqual(clone(next.process.activities[0]), d.process.activities[0]);
+    const b = next.process.activities[1];
+    assert.deepEqual(clone(b.duration), { current: 2, optimal: 1 });
+    assert.deepEqual(clone(b.predecessors), ["A"]);
+    assert.equal(b.time.leadCurrent, 1);
+    assert.equal(b.when, "go");
+    assert.equal(b.status, "done");
+    assert.equal(b.notes, "keep this note");
+    assert.ok(next.process.phases.some(p => p.id === "existing"));
+    assert.ok(next.process.phases.some(p => p.id === b.phase));
+    assert.ok(next.process.teams[b.owner]);
+    assert.deepEqual(clone(next.scenario), d.scenario);
+    assert.deepEqual(V.validate.run(next.process, next.taxonomy, next.scenario).errors, []);
+    assert.equal(h.messages.at(-1).error, undefined);
+  });
+  await test("source clipboard preserves omitted fields and rejects broken dependencies before saving", async () => {
+    const d = dataset([task("A"), task("B", { phase: "p", owner: "team", predecessors: ["A"], when: false, canOverride: "governed" })]);
+    d.process.phases = [{ id: "p", label: "Phase" }];
+    d.process.teams = { team: { label: "Team" } };
+    const h = appHarness(d);
+    const heads = ["ID", "Task", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"];
+    await h.api.importSheets({ Pasted: [heads, ["B", "Updated", 10, 2]] }, { name: "pasted table" }, { merge: true });
+    const b = h.api.getData().process.activities.find(a => a.id === "B");
+    assert.equal(h.api.getData().process.activities.length, 2);
+    assert.equal(b.phase, "p"); assert.equal(b.owner, "team"); assert.equal(b.when, false);
+    assert.equal(b.canOverride, "governed");
+    assert.deepEqual(clone(b.predecessors), ["A"]);
+    assert.equal(b.duration.optimal, 4);
+    for (const [column, expectedLead, expectedCycle] of [["Optimized Lead Time (hrs)", 1, 1], ["Optimized Cycle Time (hrs)", 3, 1]]) {
+      const partial = appHarness(dataset([task("A", { time: { leadCurrent: 6, cycleCurrent: 2, leadOptimal: 3, cycleOptimal: 1 } })]));
+      await partial.api.importSheets({ Pasted: [[...heads, column], ["A", "Partial optimized time", 10, 2, 1]] }, { name: "pasted table" }, { merge: true });
+      const a = partial.api.getData().process.activities[0];
+      assert.equal(a.time.leadOptimal, expectedLead, "omitted optimized lead must survive");
+      assert.equal(a.time.cycleOptimal, expectedCycle, "omitted optimized cycle must survive");
+      assert.equal(a.duration.optimal, expectedLead + expectedCycle);
+    }
+    const before = JSON.stringify(h.api.getData()), stored = h.storage.get("vsm.data.v1");
+    for (const pred of ["missing", "B"]) {
+      await h.api.importSheets({ Pasted: [[...heads, "Predecessor IDs"], ["A", "Bad dependency", 8, 0, pred]] }, { name: "pasted table" }, { merge: true });
+      assert.equal(JSON.stringify(h.api.getData()), before);
+      assert.equal(h.storage.get("vsm.data.v1"), stored);
+      assert.equal(h.messages.at(-1).error, true);
+    }
+    const file = appHarness(d);
+    await file.api.importSheets({ "Task List": [heads, ["B", "File replacement", 10, 2]] }, { name: "source.csv" });
+    assert.deepEqual(clone(file.api.getData().process.activities.map(a => a.id)), ["B"], "files remain authoritative replacements");
+  });
+  await test("source clipboard converts hours to weeks and avoids collisions with live definitions", () => {
+    const d = dataset([task("A", { owner: "new-team", phase: "new-phase" })]);
+    d.process.units = "weeks";
+    d.process.hoursPerDay = 10;
+    d.process.teams = { "new-team": { label: "Original team", org: "Original org" }, custom: { label: "Reused team" } };
+    d.process.stages = [{ id: "new-stage", label: "Original stage" }];
+    d.process.phases = [{ id: "new-phase", label: "Original phase", stage: "new-stage" }];
+    const snapshot = JSON.stringify(d);
+    const r = V.import.fromSheets({ Pasted: [
+      ["ID", "Task", "Phase", "Stage", "Assigned Team", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"],
+      ["B", "New B", "New phase", "New stage", "New team", 40, 10],
+      ["C", "New C", "New phase", "New stage", "Reused team", 20, 5]
+    ] }, { mergeInto: d });
+    assert.equal(JSON.stringify(d), snapshot, "preview parsing must not mutate live data");
+    const b = r.process.activities[1], c = r.process.activities[2];
+    assert.equal(b.duration.current, 1);
+    assert.equal(b.time.cycleCurrent, 0.2);
+    assert.equal(b.owner, "new-team-2"); assert.equal(c.owner, "custom");
+    assert.equal(b.phase, "new-phase-2");
+    assert.equal(r.process.phases.find(p => p.id === b.phase).stage, "new-stage-2");
+    assert.equal(r.process.teams["new-team"].label, "Original team");
+    assert.deepEqual(V.validate.run(r.process, r.taxonomy, r.scenario).errors, []);
+  });
+  await test("linked folders distinguish missing files from failed reads before loading or saving", async () => {
+    const prior = { ...V.files.state };
+    const missing = () => Object.assign(new Error("File missing"), { name: "NotFoundError" });
+    const denied = () => Object.assign(new Error("Access denied"), { name: "NotAllowedError" });
+    let writes = 0, failOptional = true;
+    const dir = {
+      queryPermission: async () => "granted",
+      getFileHandle: async (name, opts) => {
+        if (opts?.create) { writes++; return { createWritable: async () => ({ write: async () => {}, close: async () => {} }) }; }
+        if (name === V.files.FILES.process) return { getFile: async () => ({ size: 100, text: async () => V.files.wrap("process", dataset([task("A")]).process) }) };
+        throw failOptional ? denied() : missing();
+      }
+    };
+    Object.assign(V.files.state, { mode: "linked", dir });
+    try {
+      await assert.rejects(V.files.reload(), /Access denied/);
+      await assert.rejects(V.files.save(dataset([task("B")])), /Access denied/);
+      assert.equal(writes, 0, "all reads must succeed before any write starts");
+      failOptional = false;
+      const loaded = await V.files.reload();
+      assert.equal(loaded.process.activities[0].id, "A");
+      assert.equal(loaded.taxonomy, undefined, "an absent optional file remains supported");
+      const written = await V.files.save(dataset([task("B")]));
+      assert.equal(written.length, 3);
+    } finally { Object.assign(V.files.state, prior); }
+  });
+  await test("malformed saved scenarios cannot break the sidebar or erase valid saved runs", () => {
+    const run = V.runs.record(build(dataset([task("A")])), {}, "valid");
+    const bad = [
+      { runId: "missing-fields" }, { ...run, name: {} }, { ...run, totals: null },
+      { ...run, includedKeys: "A" }, { ...run, totals: { ...run.totals, elapsed: "bad" } }
+    ];
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v) };
+    try {
+      store.set(V.runs.storageKey, JSON.stringify([run, ...bad]));
+      assert.deepEqual(V.runs.list(), [run], "persisted malformed entries must be skipped");
+      V.runs.replaceAll([run]);
+      const before = store.get(V.runs.storageKey);
+      for (const item of bad) {
+        assert.throws(() => V.runs.replaceAll([item]), /invalid saved scenario/i);
+        assert.equal(store.get(V.runs.storageKey), before);
+      }
+      assert.throws(() => V.runs.replaceAll({}), /invalid saved scenario/i);
+      assert.equal(store.get(V.runs.storageKey), before);
+    } finally { delete global.localStorage; }
+  });
+  await test("rejected JSON bundles preserve saved scenarios and partial restores report failure", () => {
+    const original = V.runs.record(build(dataset([task("A")])), {}, "original");
+    const incoming = V.runs.record(build(dataset([task("B")])), {}, "incoming");
+    const serialized = JSON.stringify([original]);
+    const h = appHarness(dataset([task("A")]));
+    h.storage.set(V.runs.storageKey, serialized);
+    h.api.loadJSONFile({ name: "bad.json", content: JSON.stringify({ ...dataset([task("bad", { predecessors: ["missing"] })]), runs: [] }) });
+    assert.equal(h.storage.get(V.runs.storageKey), serialized, "invalid bundle must not delete saved runs");
+    h.api.loadJSONFile({ name: "unrecognized.json", content: JSON.stringify({ runs: [] }) });
+    assert.equal(h.storage.get(V.runs.storageKey), serialized);
+    h.refuseRunStorage();
+    h.api.loadJSONFile({ name: "partial.json", content: JSON.stringify({ ...dataset([task("B")]), runs: [incoming] }) });
+    assert.equal(h.api.getData().process.activities[0].id, "B");
+    assert.equal(h.storage.get(V.runs.storageKey), serialized);
+    assert.equal(h.messages.at(-1).error, true, "a success toast must not hide the failed scenario restore");
+    assert.match(h.messages.at(-1).message, /saved scenarios.*not restored/i);
+    const good = appHarness(dataset([task("A")]));
+    good.api.loadJSONFile({ name: "good.json", content: JSON.stringify({ ...dataset([task("B")]), runs: [incoming] }) });
+    assert.equal(JSON.parse(good.storage.get(V.runs.storageKey))[0].name, "incoming");
+    assert.equal(good.messages.at(-1).error, undefined);
+  });
+  await test("designer stays editable after a rejected apply with no stages", () => {
+    const create = tag => {
+      const n = fakeNode(tag);
+      n.events = {};
+      n.addEventListener = (event, handler) => { n.events[event] = handler; };
+      n.remove = () => { n.removed = true; };
+      return n;
+    };
+    const body = create("body");
+    const context = vm.createContext({ VSM: { ...V }, document: {
+      body, getElementById: () => null, createElement: create,
+      createTextNode: text => ({ text }), addEventListener() {}, removeEventListener() {}
+    } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/designer.js"), "utf8"), context);
+    let attempts = 0;
+    context.VSM.designer.open(dataset([task("A")]), { onApply(candidate) {
+      attempts++;
+      assert.equal(candidate.stages, undefined, "persisted data can omit empty stages");
+      return false; // e.g. quota exceeded; the working copy must survive
+    } });
+    const descendants = n => [n, ...(n.children || []).flatMap(descendants)];
+    const click = label => {
+      const button = descendants(body).find(n => n.tag === "button" && (n.children || []).some(c => c.text === label));
+      assert.ok(button, label + " exists");
+      button.events.click();
+    };
+    click("Apply changes");
+    click("Stages (0)");
+    click("Apply changes");
+    assert.equal(attempts, 2);
+    assert.equal(body.children[0].removed, undefined);
+    click("+ Add stage");
+    assert.ok(descendants(body).some(n => n.text === "Stages (1)"));
+  });
+  await test("integration entry points load derivation, tracker and workbook expression engines", () => {
+    const root = path.join(__dirname, "..");
+    const html = fs.readFileSync(path.join(root, "examples/embedded.html"), "utf8");
+    const engine = fs.readFileSync(path.join(root, "examples/backstage-plugin/src/engine.ts"), "utf8");
+    const guide = fs.readFileSync(path.join(root, "BACKSTAGE.md"), "utf8");
+    const entryPoints = [
+      ["embedded example", [...html.matchAll(/<script src="\.\.\/([^"]+)"><\/script>/g)].map(m => m[1])],
+      ["Backstage example", [...engine.matchAll(/import '\.\/vsm\/([^']+)'/g)].map(m => m[1] + ".js")],
+      ["Backstage guide", [...guide.matchAll(/import '\.\/vsm\/([^']+)'/g)].map(m => m[1] + ".js")]
+    ];
+    for (const [name, files] of entryPoints) {
+      const context = vm.createContext({ TextDecoder, TextEncoder });
+      files.forEach(file => vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), context, { filename: file }));
+      const api = context.VSM;
+      api.render.draw = () => fakeNode("svg");
+      const data = dataset([task("base"), task("derived-task", { when: { derivedFlag: true } })]);
+      data.scenario = { attributes: [{ id: "derivedFlag", label: "Derived", type: "boolean", default: false, derived: true, derive: { when: true } }], rules: {} };
+      const chart = api.embed.create(fakeNode("div"), { data });
+      assert.equal(chart.getModel().nodes.length, 2, name + " must evaluate derived answers");
+      assert.equal(typeof api.progressRender?.draw, "function", name + " must support the documented tracker view");
+      let tracked = false;
+      api.progressRender.draw = () => { tracked = true; return fakeNode("svg"); };
+      chart.update({ view: "tracker" });
+      assert.ok(tracked, name + " must use the tracker renderer");
+      if (api.import) {
+        const result = api.import.fromSheets({ "Task List": [
+          ["ID", "Phase", "Task", "Current Lead Time (hrs)", "Current Cycle Time (hrs)", "Include Expression"],
+          ["expression-task", "P1", "Expression task", "8", "4", "genAI = true"]
+        ] }, {});
+        assert.deepEqual(Array.from(result.report.errors), [], name + " workbook must import cleanly");
+        assert.deepEqual(clone(result.process.activities[0].when), { genAI: true }, name + " must compile workbook expressions");
+      }
+    }
+  });
+  await test("embed data updates validate and replace the chart without mutating caller data", () => {
+    const context = vm.createContext({ VSM: { ...V, render: { draw: () => fakeNode("svg") } } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/embed.js"), "utf8"), context);
+    const original = Object.freeze(dataset([task("A")]));
+    const next = dataset([task("B")]);
+    const chart = context.VSM.embed.create(fakeNode("div"), { data: original });
+    assert.equal(chart.update({ data: next }).nodes[0].id, "B");
+    assert.equal(chart.update({ theme: "light" }).nodes[0].id, "B");
+    const model = chart.getModel(), svg = chart.getSvg();
+    assert.throws(() => chart.update({ data: dataset([task("bad", { predecessors: ["missing"] })]) }), /Invalid data/);
+    assert.equal(chart.getModel(), model);
+    assert.equal(chart.getSvg(), svg);
+    assert.equal(chart.update({}).nodes[0].id, "B");
+    chart.setData(dataset([task("C")]));
+    assert.equal(chart.update({}).nodes[0].id, "C");
+    assert.equal(original.process.activities[0].id, "A");
+    assert.equal(next.process.activities[0].id, "B");
+  });
+  await test("saved scenarios reject silently dropped replacements and capped saves", () => {
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v) };
+    try {
+      const run = V.runs.record(build(dataset([task("A")])), {}, "original");
+      V.runs.save(run);
+      global.localStorage.setItem = () => {};
+      assert.throws(() => V.runs.save({ ...run, name: "changed" }), /did not keep/);
+      assert.equal(V.runs.list()[0].name, "original");
+      global.localStorage.setItem = (k, v) => store.set(k, v);
+      const full = Array.from({ length: 20 }, (_, i) => ({ ...run, runId: "run-" + i }));
+      V.runs.replaceAll(full);
+      global.localStorage.setItem = () => {};
+      assert.throws(() => V.runs.save({ ...run, runId: "new-run" }), /did not keep/);
+      assert.throws(() => V.runs.replaceAll(full.map(r => ({ ...r, name: "changed" }))), /did not keep/);
+      global.localStorage.setItem = (k, v) => store.set(k, v);
+      assert.equal(V.runs.save({ ...run, runId: "new-run" }).at(-1).runId, "new-run");
+      assert.equal(V.runs.list().length, 20);
+    } finally { delete global.localStorage; }
+  });
+  await test("embedded scenarios neutralize hidden and diagnostic answers before implications", () => {
+    const attrs = [
+      { id: "visible", label: "Visible", type: "boolean", default: false },
+      { id: "hidden", label: "Hidden", type: "boolean", default: true, shownWhen: { visible: true }, implies: ["implied"] },
+      { id: "diagnostic", label: "Diagnostic", type: "boolean", default: true, diagnosticOnly: true },
+      { id: "implied", label: "Implied", type: "boolean", default: false }
+    ];
+    const cfg = { attributes: attrs, rules: {} };
+    const data = dataset([task("always"), task("hidden-task", { when: { hidden: true } }),
+      task("diagnostic-task", { when: { diagnostic: true } }), task("implied-task", { when: { implied: true } })]);
+    const answers = V.rules.defaults(attrs);
+    const appModel = V.schedule.build(data.process, data.taxonomy, V.rules.effective(attrs, answers, {}), {}, attrs);
+    const embeddedModel = V.schedule.build(data.process, data.taxonomy, V.embed.resolveScenario(cfg), {}, attrs);
+    assert.deepEqual(embeddedModel.nodes.map(n => n.id), appModel.nodes.map(n => n.id));
+    assert.deepEqual(embeddedModel.nodes.map(n => n.id), ["always"]);
+    const visible = V.embed.resolveScenario(cfg, null, { visible: true });
+    assert.equal(visible.hidden, true);
+    assert.equal(visible.implied, true);
+    assert.equal(answers.hidden, true, "neutralizing must preserve the user's stored answer");
+  });
+  await test("saved scenario reads tolerate a denied localStorage getter", () => {
+    Object.defineProperty(global, "localStorage", { configurable: true, get() { throw new Error("Storage denied"); } });
+    try {
+      assert.equal(V.runs.list().length, 0);
+      assert.throws(() => V.runs.save({ runId: "test" }), /Storage denied|no storage/);
+    } finally { delete global.localStorage; }
+  });
   await test("oversized compressed input is rejected before parsing", async () => {
     await assert.rejects(V.table.parseXLSX(new ArrayBuffer(V.table.XLSX_LIMITS.compressedBytes + 1)), /input limit/);
   });
@@ -426,7 +807,7 @@ function form(extra = {}) {
       queryPermission: async () => "granted",
       requestPermission: async () => "granted",
       getFileHandle: async () => ({
-        getFile: async () => { throw new Error("new file"); },
+        getFile: async () => { throw Object.assign(new Error("new file"), { name: "NotFoundError" }); },
         createWritable: async () => { if (++n === 3) throw new Error("QuotaExceededError"); return { write: async () => {}, close: async () => {} }; }
       })
     };

@@ -45,7 +45,7 @@ VSM.schedule = (function () {
     let note = null;
     if (Array.isArray(act.overrides)) {
       for (const o of act.overrides) {
-        if (VSM.rules.evaluate(o.when, scenario, named)) { d = o.duration || d; note = o.note || "Scenario override applied"; break; }
+        if (VSM.rules.evaluate(o.when, scenario, named)) { d = Object.assign({}, d, o.duration || {}); note = o.note || "Scenario override applied"; break; }
       }
     }
     /* Scenario multipliers. Toggles do not only add and remove steps, they

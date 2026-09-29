@@ -28,7 +28,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.5.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.5.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.5.1 release](https://github.com/mrobinson2/flowline/releases/tag/v1.5.1) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 
@@ -108,7 +108,7 @@ Or skip the file entirely: **copy rows in Excel or Google Sheets and paste them 
 
 **Export ▾ → Editable workbook** writes the same Activities format back out — change it in Excel, import it straight back, round trip complete.
 
-A sheet carrying `ID`, `Task`, `Current Lead Time (hrs)` and `Current Cycle Time (hrs)` is treated as a source workbook and replaces the whole data set: activities, teams, phases, the waste taxonomy and the scenario switches. Anything else merges into the current data as an activities table.
+A file carrying `ID`, `Task`, `Current Lead Time (hrs)` and `Current Cycle Time (hrs)` is treated as a source workbook and replaces the whole data set: activities, teams, phases, the waste taxonomy and the scenario switches. Pasting those same columns merges the rows, converts hours to the current process units, and preserves unpasted tasks and existing definitions. Other imported files update the activities table to match their rows.
 
 Three things the import assumes about that workbook format, each of which it also reports:
 
