@@ -101,6 +101,20 @@
     if (t.json) { if (stats) stats.unrepresentable.push(what); return ""; }
     return t.text;
   }
+  function derivationCell(a, stats) {
+    if (!a.derive) return a.derivation || "";
+    const t = VSM.admin.derivationToText(a.derive);
+    if (t.json) { stats.unrepresentable.push("Derivation of " + a.id); return a.derivation || ""; }
+    return t.text;
+  }
+  /* parallel to Options; blank when every label is just its value. A label
+     containing the ";" separator cannot be written and is counted. */
+  function optionLabels(a, stats) {
+    const opts = a.options || [];
+    if (!opts.some(o => o.label !== undefined && o.label !== o.value)) return "";
+    if (opts.some(o => String(o.label === undefined ? o.value : o.label).indexOf(";") >= 0)) { stats.unrepresentable.push("Option Labels of " + a.id); return ""; }
+    return opts.map(o => (o.label === undefined ? o.value : o.label)).join(";");
+  }
   const yesNo = v => (v === true ? "Yes" : v === false ? "No" : "");
 
   /* --------------------------------------------------------------- the rows */
@@ -345,7 +359,8 @@
       out.push({
         name: "Toggles", headers: VSM.schema.TOGGLES.map(c => c.header), widths: [16, 22, 40, 10, 54, 20, 16, 52],
         rows: cfg.attributes.map(a => ({
-          "Toggle ID": a.id, "Group": a.group || "", "Label": a.label,
+          /* blank reads back as "Options" (import.js), so say so */
+          "Toggle ID": a.id, "Group": a.group || "Options", "Label": a.label,
           "Type": a.type === "boolean" ? "boolean" : a.type === "multi" ? "multi" : "choice",
           "Options": (a.options || []).map(o => o.value).join(";"),
           "Default": Array.isArray(a.default) ? a.default.join(";") : a.default === true ? "Yes" : a.default === false ? "No" : txt(a.default),
@@ -354,12 +369,16 @@
           "Section": a.section === undefined ? "" : a.section,
           "Shown When": a.diagnosticOnly ? "Diagnostic mode only" : a.shownWhen === undefined ? "" : ruleText(a.shownWhen, "Shown When of " + a.id, opts.stats),
           "Derived": a.derived ? "Yes" : "",
-          /* the workbook's own prose if it had some; else a boolean derivation
-             as an expression. Ordered enum cases have no cell syntax. */
-          "Derivation": a.derivation ? a.derivation : a.derive && a.derive.when !== undefined ? ruleText(a.derive.when, "Derivation of " + a.id, opts.stats) : "",
+          /* the live derivation as text (an expression, or ordered
+             "<value> WHEN ...; ELSE <value>" cases for a choice); prose
+             only when the attribute has no computed derivation */
+          "Derivation": derivationCell(a, opts.stats),
           "Required": a.required ? "Yes" : "",
           "Override Requires Reason": a.overrideRequiresReason ? "Yes" : "",
-          "Audit Relevant": a.auditRelevant ? "Yes" : ""
+          "Audit Relevant": a.auditRelevant ? "Yes" : "",
+          "Enabled When": a.enabledWhen === undefined ? "" : ruleText(a.enabledWhen, "Enabled When of " + a.id, opts.stats),
+          "Hidden": a.hidden ? "Yes" : "",
+          "Option Labels": optionLabels(a, opts.stats)
         }))
       });
       if ((cfg.presets || []).length) {
@@ -457,7 +476,9 @@
         { Field: "Critical path", Value: r2(model.metrics.currentElapsed / (/hour/i.test(String((model.process && model.process.units) || "")) ? ((model.process && model.process.hoursPerDay) || 8) : 1)) + " days" },
         { Field: "Columns R..X", Value: "Recomputed from this export's scenario, not copied from the source workbook." },
         { Field: "Rule layer", Value: "Rules, Toggles and Include Expression are written from the live data, so admin-mode edits survive a re-import. The Scenario Matrix is copied from the imported workbook; a task whose condition was edited in the app carries it in Include Expression, which takes precedence over its matrix row (the row's duration multipliers still apply)." },
-        { Field: "Not carried", Value: "Enabled When gates and derived choices with ordered cases have no workbook column; use the JSON export to keep them." + (opts.stats.unrepresentable.length ? " Not expressible as text, left blank: " + opts.stats.unrepresentable.join(", ") + "." : "") },
+        { Field: "Not carried", Value: opts.stats.unrepresentable.length
+          ? "Not expressible in a cell, left blank - use the JSON export to keep them: " + opts.stats.unrepresentable.join(", ") + "."
+          : "Nothing: every rule, gate and derivation in this export is written as text." },
         { Field: "Caveat", Value: (model.process && model.process.caveat) || "Durations are estimates." }
       ]
     });

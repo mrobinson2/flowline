@@ -1455,5 +1455,62 @@ function form(extra = {}) {
     Object.keys(sd.scenario.rules).forEach(id => assert.equal(canon(s2.scenario.rules["R_" + id]), canon(sd.scenario.rules[id]), id));
   });
 
+  await test("1.5.0: the shipped sample survives the workbook round trip - gates, ordered derivations, labels", () => {
+    const toMatrix = sh => [sh.headers].concat(sh.rows.map(r => sh.headers.map(h => r[h] === undefined ? "" : r[h])));
+    const trip = d => {
+      const all = {}; d.process.activities.forEach(a => { all[a.id] = true; });
+      const m = V.schedule.build(d.process, d.taxonomy, V.rules.defaults(d.scenario.attributes), d.scenario.rules, d.scenario.attributes, { derived: {}, tasks: all });
+      const sheets = {};
+      V.exportWorkbook.sheets(m, { scenarioCfg: d.scenario, scenarioSummary: "" }).forEach(sh => { sheets[sh.name] = toMatrix(sh); });
+      return { sheets, r: V.import.fromSheets(sheets, {}) };
+    };
+    const included = (d, sc) => JSON.stringify(V.schedule.build(d.process, d.taxonomy,
+      V.rules.effective(d.scenario.attributes, sc, d.scenario.rules), d.scenario.rules, d.scenario.attributes).nodes.map(n => n.id).sort());
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const { sheets, r } = trip(d);
+    assert.equal(r.report.errors.length, 0, JSON.stringify(r.report.errors));
+    assert.deepEqual(r.report.warnings, [], JSON.stringify(r.report.warnings));
+    const byId = id => r.scenario.attributes.find(a => a.id === id);
+    /* the fields that had no column */
+    assert.deepEqual(byId("patternConforms").enabledWhen, { approvedPatternExists: true });
+    assert.deepEqual(byId("hardwareProcurement").enabledWhen, { hosting: "on-prem" });
+    assert.equal(byId("workType").hidden, true);
+    assert.equal(byId("workType").options.find(o => o.value === "saas").label, "Adopt SaaS");
+    const lane = d.scenario.attributes.find(a => a.id === "architectureLane");
+    assert.equal(JSON.stringify(byId("architectureLane").derive), JSON.stringify(lane.derive), "ordered cases survive");
+    assert.equal(byId("selectionRoute").derive.cases.length, d.scenario.attributes.find(a => a.id === "selectionRoute").derive.cases.length);
+    /* and the point: every scenario includes the same tasks */
+    const base = V.rules.defaults(d.scenario.attributes);
+    const scs = [base,
+      Object.assign({}, base, { serviceTier: "Tier 4" }),
+      Object.assign({}, base, { serviceTier: "Tier 0", newTechnology: true }),
+      Object.assign({}, base, { hosting: "on-prem", hardwareProcurement: true }),
+      Object.assign({}, base, { hosting: "azure", hardwareProcurement: true }),      // disabled answer
+      Object.assign({}, base, { approvedPatternExists: false, patternConforms: true }),
+      Object.assign({}, base, { approvedPatternExists: true, patternConforms: true, serviceTier: "Tier 4" })]
+      .concat(d.scenario.presets.map(p => V.rules.applyPreset(d.scenario.attributes, base, p)))
+      .concat(d.scenario.presets.map(p => Object.assign(V.rules.applyPreset(d.scenario.attributes, base, p), { requirementsUnderstood: false, unprovenTechnicalClaim: true })));
+    scs.forEach((sc, i) => assert.equal(included(r, sc), included(d, sc), "scenario #" + i + " changed across the round trip"));
+    /* a second trip changes nothing in the rule layer (the sample's own
+       day-based durations and waste taxonomy are converted on the first
+       trip; workbook-origin data is held to a full fixed point in 1.4.0) */
+    const again = trip(r).sheets;
+    ["Toggles", "Rules"].forEach(n => assert.equal(JSON.stringify(again[n]), JSON.stringify(sheets[n]), n + " drifted on the second trip"));
+
+    /* the case syntax on its own: text round trip, and loud failures */
+    const attrs = d.scenario.attributes, ids = Object.keys(d.scenario.rules);
+    const t = V.admin.derivationToText(lane.derive);
+    assert.ok(/^custom WHEN .+; fast WHEN .+; ELSE standard$/.test(t.text), t.text);
+    assert.equal(JSON.stringify(V.admin.textToDerivation(t.text, lane, attrs, ids)), JSON.stringify(lane.derive));
+    assert.throws(() => V.admin.textToDerivation("sideways WHEN serviceTier = \"Tier 0\"; ELSE standard", lane, attrs, ids), /not one of/);
+    assert.throws(() => V.admin.textToDerivation("custom WHEN serviceTeer = x", lane, attrs, ids), /unknown attribute/);
+    /* a Derivation cell that reads as cases but does not compile warns - it is not prose */
+    const bad = JSON.parse(JSON.stringify(sheets));
+    const hd = bad.Toggles[0], row = bad.Toggles.find(x => x[0] === "architectureLane");
+    row[hd.indexOf("Derivation")] = "custom WHEN nosuchThing; ELSE standard";
+    const rb = V.import.fromSheets(bad, {});
+    assert.ok(rb.report.warnings.some(w => /architectureLane/.test(w) && /Derivation/.test(w)), JSON.stringify(rb.report.warnings));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

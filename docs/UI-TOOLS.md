@@ -120,11 +120,18 @@ name for the log (remembered in this browser).
 
 The Excel export carries the edits: the Rules sheet is written from the live
 rules, the Toggles sheet from the live variables (section, group, Shown When,
-derivation), each edited task's condition goes in its Include Expression
-cell, which wins over its Scenario Matrix row on re-import (the row still
-supplies duration multipliers), and the log goes out as a Versions sheet.
-Enabled When gates and derived choices with ordered cases have no workbook
-column; Export Notes says so, and the JSON export keeps everything.
+Enabled When, Hidden, Option Labels, derivation), each edited task's
+condition goes in its Include Expression cell, which wins over its Scenario
+Matrix row on re-import (the row still supplies duration multipliers), and
+the log goes out as a Versions sheet. A derived choice is written as ordered
+cases in its Derivation cell, first match wins:
+
+    custom WHEN architectureDeviation OR newEnterprisePlatform; fast WHEN approvedPatternExists AND patternConforms; ELSE standard
+
+`WHEN` and `ELSE` are uppercase keywords like `AND`; a value that is not a
+plain word is quoted. A cell written that way that fails to compile is a
+warning on import, not silently kept as prose. The shipped sample exported
+and re-imported includes the same tasks in every preset.
 
 ## Import, paste, and the preview
 

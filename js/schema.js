@@ -240,7 +240,14 @@
     { key: "derivation", header: "Derivation", type: "text",   optional: true, confirmed: false },
     { key: "required",  header: "Required",    type: "text",   optional: true, confirmed: false },
     { key: "overrideRequiresReason", header: "Override Requires Reason", type: "text", optional: true, confirmed: false, aliases: ["OverrideRequiresReason"] },
-    { key: "auditRelevant", header: "Audit Relevant", type: "text", optional: true, confirmed: false, aliases: ["AuditRelevant"] }
+    { key: "auditRelevant", header: "Audit Relevant", type: "text", optional: true, confirmed: false, aliases: ["AuditRelevant"] },
+    /* 1.5.0: what a workbook could not carry before. Enabled When greys a
+       control out (its answer is neutralized while disabled); Hidden keeps a
+       preset-driven answer out of the sidebar; Option Labels, parallel to
+       Options, is what the sidebar shows for each value. */
+    { key: "enabledWhen",  header: "Enabled When",  type: "text", optional: true, confirmed: false, aliases: ["EnabledWhen"] },
+    { key: "hidden",       header: "Hidden",        type: "text", optional: true, confirmed: false },
+    { key: "optionLabels", header: "Option Labels", type: "text", optional: true, confirmed: false, aliases: ["OptionLabels", "Choice Labels"] }
   ];
 
   /* Profiles and the matrix have one column per toggle, so their headers are

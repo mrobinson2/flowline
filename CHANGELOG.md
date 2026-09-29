@@ -1,3 +1,44 @@
+# Flowline 1.5.0
+
+Prepared 28 September 2026 from 1.4.0. Closes the two workbook gaps 1.4.0 named in its Export Notes: nothing in the rule layer is left behind when a scenario set goes out to Excel and comes back. The shipped sample exported and re-imported now includes the same tasks in the default scenario, every preset, and a set of targeted gate, tier and selection scenarios — it matched in none of them before.
+
+## Added
+
+1. **Enabled When, Hidden and Option Labels on the Toggles sheet.** A greyed-out control's gate (the sample's *pattern conforms* and *hardware purchase*), a preset-driven question kept out of the sidebar (*work type*), and the label shown for each option value now have columns. Option Labels is parallel to Options, position for position; a count mismatch warns and falls back to the values.
+
+2. **Ordered derivations in one cell.** A derived choice's Derivation cell takes ordered cases, first match wins:
+
+   ```text
+   custom WHEN architectureDeviation OR newEnterprisePlatform; fast WHEN approvedPatternExists AND patternConforms; ELSE standard
+   ```
+
+   `WHEN` and `ELSE` are uppercase keywords like `AND`; a value that is not a plain word is quoted; each case's value is checked against the choice's options. Prose still imports as documentation, but a cell written in the case syntax that fails to compile is a warning naming the toggle — not silently kept as prose. The sample's architecture route and selection route, both of which decide tasks, now survive the trip.
+
+## Fixed
+
+3. **Gates and derivations can name rules.** Shown When, Enabled When and Derivation compiled before the Rules sheet was read, so an `R_` reference in any of them failed. They now compile after it.
+
+4. **No false "no task is tied to any toggle" warning** on a workbook whose tasks are tied by Include Expressions rather than a Scenario Matrix.
+
+## Known
+
+The shipped sample's own waste categories and day-based durations do not map one-for-one onto the workbook's DOWNTIME list and hour columns, so those two Task List columns change shape on the first trip (the rule layer does not). Workbook-origin data is unaffected and is held to a full fixed point by the 1.4.0 regression.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     81 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (578 KB)
+```
+
+Browser-verified in Chrome: the shipped sample through the real .xlsx writer and reader matches in the default and all seven presets with no errors or warnings, Export Notes reports nothing left out, and the re-imported set loads into the app with the gate applied, *work type* hidden and the option labels shown.
+
+---
+
 # Flowline 1.4.0
 
 Prepared 27 September 2026 from 1.3.0. The last three phases of the specification gap-closure program (plans in `docs/superpowers/plans/`): the tool now explains every absence as well as every presence, keeps the scenarios worth keeping, and lets a platform architect change which tasks fire without touching code or the spreadsheet — seeing the effect on those saved scenarios before anything is applied. Every change landed test-first, the branch had a whole-diff review before merge, and the shipped sample's default map is unchanged: 39 activities, 198 days.
