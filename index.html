@@ -12,7 +12,7 @@
   <div class="brand">
     <span class="logo">VS</span>
     <div>
-      <h1 id="title">Value Stream</h1>
+      <div class="title-row"><h1 id="title">Value Stream</h1><span id="app-version" class="app-version"></span></div>
       <div id="subtitle" class="subtitle"></div>
     </div>
   </div>
@@ -132,6 +132,7 @@
   </aside>
 
   <div class="content">
+    <div id="stale-data" class="stale-data" role="status" hidden></div>
     <div id="metrics" class="metrics"></div>
     <div id="chart-wrap"><div id="chart"></div></div>
   </div>
@@ -159,6 +160,7 @@
 
 <!-- data (plain JSON inside a one-line wrapper so the app works from file://) -->
 <script src="js/registry.js"></script>
+<script src="js/version.js"></script>
 <script src="js/units.js"></script>
 <script src="js/schema.js"></script>
 <script src="data/taxonomy.data.js"></script>

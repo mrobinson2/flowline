@@ -468,6 +468,7 @@
       name: "Export Notes", headers: ["Field", "Value"], widths: [30, 90],
       rows: [
         { Field: "Source", Value: (model.process && model.process.title) || "" },
+        { Field: "Flowline version", Value: VSM.version ? VSM.version.VERSION : "" },
         { Field: "Exported", Value: new Date().toISOString().slice(0, 16).replace("T", " ") },
         { Field: "Scenario", Value: opts.scenarioSummary || "(not recorded)" },
         { Field: "Tasks in this export", Value: model.nodes.length },
