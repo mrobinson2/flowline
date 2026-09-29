@@ -1968,5 +1968,35 @@ function form(extra = {}) {
     assert.equal(new Set(shapes).size, shapes.length, "selection routes share a task set: " + shapes.join(" | "));
   });
 
+  await test("1.6.1: the version is known, and saved data made against older shipped data is detected", () => {
+    /* the constant the UI shows is the VERSION file, not a second copy that drifts */
+    assert.equal(V.version.VERSION, fs.readFileSync(path.join(__dirname, "..", "VERSION"), "utf8").trim());
+    const shippedNow = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const fp = V.version.fingerprint;
+    assert.equal(fp(shippedNow.process), fp(clone(shippedNow.process)), "deterministic");
+    const moved = clone(shippedNow.process); moved.activities[0].duration.current += 1;
+    assert.notEqual(fp(moved), fp(shippedNow.process), "sensitive to one duration");
+
+    /* no saved copy: nothing to warn about */
+    assert.equal(V.version.staleness(null, shippedNow), null);
+    assert.equal(V.version.staleness({}, shippedNow), null);
+    /* a copy saved before 1.6.1 carries no basis: it predates this release by definition */
+    const legacy = { process: clone(shippedNow.process), processSource: "edited" };
+    const st = V.version.staleness(legacy, shippedNow);
+    assert.ok(st && st.savedWith === null && st.parts.join() === "process", JSON.stringify(st));
+    /* stamped against today's shipped data: fresh */
+    const fresh = V.version.stamp({ process: clone(shippedNow.process), scenario: clone(shippedNow.scenario) }, shippedNow);
+    assert.equal(fresh.basis.version, V.version.VERSION);
+    assert.equal(V.version.staleness(fresh, shippedNow), null);
+    /* the shipped scenario changes under a copy that pins its own scenario: stale, naming the part */
+    const newer = clone(shippedNow); newer.scenario.attributes[1].label += " (renamed)";
+    assert.deepEqual(V.version.staleness(fresh, newer).parts, ["scenario"]);
+    /* ...but a copy that only carries the process does not care: the scenario loads fresh */
+    const onlyProcess = V.version.stamp({ process: clone(shippedNow.process) }, shippedNow);
+    assert.equal(V.version.staleness(onlyProcess, newer), null);
+    /* stamping never touches the saved data itself */
+    assert.equal(JSON.stringify(onlyProcess.process), JSON.stringify(shippedNow.process));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

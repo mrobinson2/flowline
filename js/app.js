@@ -91,6 +91,35 @@
     $("#btn-reload-folder").hidden = st.mode === "shipped";
     $("#btn-unlink-folder").hidden = st.mode === "shipped";
     $("#btn-link-folder").textContent = st.mode === "linked" ? "Relink folder" : "Link data folder";
+    renderStaleNotice(st.mode === "linked" || st.mode === "needs-permission" ? null : o);
+  }
+
+  /* A saved copy wins over the shipped files on every visit, including after
+     an upgrade. When the shipped part it replaces has changed since it was
+     saved, say so above the metrics - otherwise new sample tasks and rules
+     simply never appear, with nothing on screen to explain why. */
+  const PART_NAMES = { process: "tasks", scenario: "questions and rules", taxonomy: "categories" };
+  function renderStaleNotice(override) {
+    const box = $("#stale-data");
+    if (!box) return;
+    const st = VSM.version ? VSM.version.staleness(override, VSM.data) : null;
+    box.hidden = !st;
+    box.innerHTML = "";
+    if (!st) return;
+    const parts = st.parts.map(p => PART_NAMES[p] || p);
+    const list = parts.length > 1 ? parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1] : parts[0];
+    box.appendChild(h("div", { class: "stale-text" },
+      h("strong", null, "You are looking at saved data, not the Flowline " + VSM.version.VERSION + " sample. "),
+      "It was " + (st.savedWith ? "saved with Flowline " + st.savedWith : "saved before Flowline 1.6.1") +
+      ", and the shipped " + list + " have changed since, so the new ones do not appear here."));
+    box.appendChild(h("div", { class: "stale-actions" },
+      h("button", { type: "button", class: "primary small", onclick: () => {
+        localStorage.removeItem(DATA_KEY); init(); toast("Back to the shipped data files");
+      } }, "Use the shipped data"),
+      h("button", { type: "button", class: "ghost small", title: "Keep your copy; this notice returns only if the shipped data changes again", onclick: () => {
+        try { writeOverride(readOverride()); } catch (e) { toast("Not kept: " + e.message, true); return; }
+        box.hidden = true; toast("Keeping your saved data");
+      } }, "Keep my data")));
   }
 
   function defaultState() {
@@ -1114,6 +1143,9 @@
      through here; checking only one of the three call sites left the other two
      able to report success over data that was never stored. */
   function writeOverride(o) {
+    /* stamped with what the shipped files are now, so a later release can
+       tell this copy predates it (js/version.js) */
+    if (VSM.version) VSM.version.stamp(o, VSM.data);
     localStorage.setItem(DATA_KEY, JSON.stringify(o));
     const back = readOverride();
     const kept = Object.keys(o).every(k => back[k] !== undefined);
@@ -1595,6 +1627,8 @@
     const ok = loadData();
     loadState();
     $("#title").textContent = data.process.title || "Value Stream";
+    const ver = $("#app-version");
+    if (ver && VSM.version) { ver.textContent = "v" + VSM.version.VERSION; ver.title = "Flowline " + VSM.version.VERSION; }
     $("#subtitle").textContent = data.process.subtitle || "";
     document.title = (data.process.title ? data.process.title + " · " : "") + "Flowline - Value Stream Timeline";
     applyPanels();

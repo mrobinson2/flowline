@@ -30,7 +30,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.6.0 release](https://github.com/mrobinson2/flowline/releases/tag/v1.6.0) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.6.1 release](https://github.com/mrobinson2/flowline/releases/tag/v1.6.1) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 
@@ -142,7 +142,7 @@ VSM.register("process", {
 
 The wrapper exists because browsers refuse `fetch()` of a local file opened from disk, while `<script src>` works everywhere. The same files work unchanged hosted as a static site.
 
-**Import** also takes `.json`, and you can drop any supported file on the page. It accepts a process file, a taxonomy file, a scenario file, or a bundle of all three. Imported data stays in the browser until you press **Discard loaded data**, and **Export ▾ → JSON bundle** writes it back out.
+**Import** also takes `.json`, and you can drop any supported file on the page. It accepts a process file, a taxonomy file, a scenario file, or a bundle of all three. Imported data stays in the browser until you press **Discard loaded data**, and **Export ▾ → JSON bundle** writes it back out. That saved copy wins over the shipped files on every later visit, including after an upgrade, so from 1.6.1 each copy remembers which shipped data it was made against: when the shipped tasks, questions or categories it replaces have changed since, a notice above the metrics says so and offers **Use the shipped data** or **Keep my data**. The version you are running is shown beside the title.
 
 ## Scenario tailoring
 

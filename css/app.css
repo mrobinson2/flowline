@@ -30,6 +30,11 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .logo { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: linear-gradient(135deg, #3B82F6, #A855F7); font-weight: 700; font-size: 13px; color: #fff; letter-spacing: 0.5px; }
 .brand h1 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .subtitle { color: var(--text-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.app-version { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 7px; vertical-align: 2px; white-space: nowrap; }
+.stale-data { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 4px; padding: 9px 12px; border: 1px solid #F59E0B; border-radius: 8px; background: rgba(245,158,11,0.10); font-size: 12.5px; }
+.stale-data .stale-text { flex: 1 1 320px; }
+.stale-data .stale-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .views { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
 .views button { border: 0; background: transparent; color: var(--text-2); padding: 6px 14px; border-radius: 999px; font-weight: 500; }
 .views button.on { background: var(--hover); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }

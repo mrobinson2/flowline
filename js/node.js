@@ -19,6 +19,7 @@
    tested on.
    ========================================================================== */
 require("./registry.js");
+require("./version.js");
 require("./units.js");
 require("./schema.js");
 require("./rules.js");

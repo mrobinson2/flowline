@@ -1,3 +1,35 @@
+# Flowline 1.6.1
+
+Prepared 29 September 2026 from 1.6.0. After 1.6.0, a user reported that choosing options still changed nothing, and there was no way to see which version was running. On the released code every option does change the map. The likely cause is a copy of data saved in the browser before the upgrade, which keeps hiding the new sample with nothing on screen to say so. This release makes that visible.
+
+## Added
+
+1. **The version is shown beside the title** (`v1.6.1`) and written to the workbook's Export Notes. It comes from `js/version.js`, which a regression holds equal to the `VERSION` file.
+
+2. **Saved data that predates the shipped files says so.** Data that was imported, loaded or edited in the app is saved in the browser as a full copy of the parts it replaces (tasks, questions and rules, categories). That copy wins over the shipped files on every visit, and before this release that held across upgrades with nothing on screen. Every saved copy is now stamped with a fingerprint of each shipped part as it was when it was saved. When a part the copy replaces has changed in the shipped files since, a notice above the metrics names what changed and offers two choices:
+   - **Use the shipped data** discards the copy.
+   - **Keep my data** re-stamps the copy, so the notice returns only if the shipped data changes again.
+
+   Copies saved before 1.6.1 carry no stamp, so they are reported as older. A copy that carries only the task list does not hold back a newer set of questions, because those still load from the shipped files. A linked data folder is not affected.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     102 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (611 KB)
+```
+
+Browser-verified in Chrome:
+- A copy saved the way 1.5-era code saves it (69 tasks, no stamp) shows the notice above the metrics, with the badge reading v1.6.1.
+- **Keep my data** hides the notice, and it stays hidden after a reload.
+- A fresh legacy copy followed by **Use the shipped data** returns to the shipped files: 198 days, and a proof of concept at 193.
+
+---
+
 # Flowline 1.6.0
 
 Prepared 28 September 2026 from 1.5.1. Answers a user review of the sidebar: *Build on Paved Road* and *Build Custom* showed the same numbers, and lifecycle stage, runtime model, Generative AI and the selection facts changed nothing. Measured before changing anything: the engine was right, but the shipped sample's content was thin. About a third of the options drove no step, the standard and custom architecture routes produced the same steps, Generative AI gated nothing, every selection route led to the same single RFP step, and six derived values were read by nothing. This release is sample data plus a test that keeps it honest. No engine change, and the default map is unchanged: 39 activities, 198 days, the same excess, handoffs, gates and waiting.
