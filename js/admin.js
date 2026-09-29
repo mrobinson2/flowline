@@ -69,7 +69,9 @@
       { derived: run.overrides || {}, tasks: run.taskOverrides || {} });
     return m.nodes.map(n => n.id);
   }
-  function impact(data, candidate, runs) {
+  function impact(data, candidate, runs, renames) {
+    const acts = (renames && renames.activities) || {};
+    const ra = id => (Object.prototype.hasOwnProperty.call(acts, id) ? acts[id] : id);
     return (runs || []).map(run => {
       const recorded = run.includedKeys || [];
       /* a run that no longer replays under the live data is stale by
@@ -78,8 +80,11 @@
       try { now = replay(data, run); } catch (e) { now = recorded; broken = true; }
       const rec = new Set(recorded);
       const stale = broken || now.length !== recorded.length || now.some(id => !rec.has(id));
+      /* the candidate speaks the renamed vocabulary: replay the run in it,
+         and compare against the live result under the new names */
+      now = now.map(ra);
       let after;
-      try { after = replay(candidate, run, data.taxonomy); }
+      try { after = replay(candidate, renames ? renameRun(run, renames) : run, data.taxonomy); }
       catch (e) {
         return { runId: run.runId, name: run.name, error: e.message, added: [], removed: [], before: now.length, after: 0, stale };
       }
@@ -198,6 +203,178 @@
     return out;
   }
 
+  /* ------------------------------------------------------------- renaming
+     An id is a name other things point at. Renaming one rewrites every
+     pointer in the candidate - never the live data - and returns how many it
+     moved. The candidate then goes through the same validate / preview /
+     apply path as any edit, so a rename that would leave a ghost fails
+     validation instead of reaching the chart.
+
+     Rule JSON is walked structurally: a comparison object's KEYS are
+     variable ids, a bare string in a rule position is a named-rule
+     reference, and values are data (renaming a variable to "tier" does not
+     rewrite an option called "tier"). */
+  function mapRule(rule, onKey, onRef, d) {
+    const depth = d || 0;
+    if (depth > 64) return rule;
+    if (typeof rule === "string") return onRef ? onRef(rule) : rule;
+    if (Array.isArray(rule)) return rule.map(r => mapRule(r, onKey, onRef, depth + 1));
+    if (!rule || typeof rule !== "object") return rule;
+    const keys = Object.keys(rule);
+    if (keys.length === 1 && (keys[0] === "all" || keys[0] === "any"))
+      return { [keys[0]]: (rule[keys[0]] || []).map(r => mapRule(r, onKey, onRef, depth + 1)) };
+    if (keys.length === 1 && keys[0] === "not") return { not: mapRule(rule.not, onKey, onRef, depth + 1) };
+    if (!onKey) return rule;
+    const out = {};
+    keys.forEach(k => { out[onKey(k)] = rule[k]; });
+    return out;
+  }
+  /* every rule-valued slot in the data, rewritten in place */
+  function eachRule(data, fn) {
+    ((data.process && data.process.activities) || []).forEach(a => {
+      if (a.when !== undefined) a.when = fn(a.when);
+      (a.overrides || []).forEach(o => { if (o.when !== undefined) o.when = fn(o.when); });
+      (a.multipliers || []).forEach(m => { if (m.when !== undefined) m.when = fn(m.when); });
+    });
+    const sc = data.scenario || {};
+    Object.keys(sc.rules || {}).forEach(k => { sc.rules[k] = fn(sc.rules[k]); });
+    (sc.attributes || []).forEach(a => {
+      if (a.shownWhen !== undefined) a.shownWhen = fn(a.shownWhen);
+      if (a.enabledWhen !== undefined) a.enabledWhen = fn(a.enabledWhen);
+      if (a.derive) {
+        if (a.derive.when !== undefined) a.derive.when = fn(a.derive.when);
+        (a.derive.cases || []).forEach(c => { c.when = fn(c.when); });
+      }
+    });
+  }
+  /* rename a key of a plain object without moving it in the key order */
+  function renameKey(obj, from, to) {
+    if (!obj || !Object.prototype.hasOwnProperty.call(obj, from)) return obj;
+    const out = {};
+    Object.keys(obj).forEach(k => { out[k === from ? to : k] = obj[k]; });
+    return out;
+  }
+  const ACT_ID = /^[A-Za-z0-9][A-Za-z0-9_.\-]*$/, VAR_ID = /^[A-Za-z][A-Za-z0-9_]*$/;
+  /* -> null when newId may replace oldId, else the reason it may not */
+  function checkId(data, kind, oldId, newId) {
+    const id = String(newId || "").trim();
+    if (!id) return "The id cannot be empty.";
+    if (id === oldId) return null;
+    const sc = data.scenario || {};
+    if (kind === "activity") {
+      if (!ACT_ID.test(id)) return "An activity id starts with a letter or digit and uses letters, digits, '-', '_' or '.'.";
+      if (((data.process && data.process.activities) || []).some(a => a.id === id)) return "'" + id + "' is already the id of another activity.";
+      return null;
+    }
+    if (kind === "variable" && /^R_/.test(id)) return "R_ is reserved for rule names.";
+    const bare = kind === "rule" ? id.replace(/^R_/, "") : id;
+    if (!VAR_ID.test(bare)) return "An id must start with a letter and use only letters, digits and _.";
+    const taken = (sc.attributes || []).map(a => a.id).concat(Object.keys(sc.rules || {})).filter(x => x !== oldId);
+    if (taken.includes(id) || taken.includes(bare) || taken.includes(alias(bare))) return "'" + id + "' is already a variable or rule.";
+    return null;
+  }
+  function renameActivity(data, oldId, newId) {
+    let n = 0;
+    ((data.process && data.process.activities) || []).forEach(a => {
+      if (a.id === oldId) { a.id = newId; n++; }
+      ["predecessors", "handoffs"].forEach(k => {
+        if (Array.isArray(a[k])) a[k] = a[k].map(p => (p === oldId ? (n++, newId) : p));
+      });
+    });
+    /* the Scenario Matrix kept from an imported workbook is keyed by task id */
+    const mx = data.scenario && data.scenario.matrixSheet;
+    if (mx && Array.isArray(mx.headers)) {
+      const c = mx.headers.findIndex(h => String(h).trim().toLowerCase() === "task id");
+      if (c >= 0) (mx.rows || []).forEach(r => { if (String(r[c]).trim() === oldId) { r[c] = newId; n++; } });
+    }
+    return n;
+  }
+  /* "id" or "id=value" -> the same with the id replaced */
+  const headRename = (spec, oldId, newId) => {
+    const s = String(spec), eq = s.indexOf("=");
+    const head = (eq < 0 ? s : s.slice(0, eq)).trim();
+    return head === oldId ? newId + (eq < 0 ? "" : s.slice(eq)) : null;
+  };
+  function renameVariable(data, oldId, newId) {
+    let n = 0;
+    const sc = data.scenario || {};
+    eachRule(data, r => mapRule(r, k => (k === oldId ? (n++, newId) : k), null));
+    (sc.attributes || []).forEach(a => {
+      if (a.id === oldId) { a.id = newId; n++; }
+      if (Array.isArray(a.implies)) a.implies = a.implies.map(spec => { const r = headRename(spec, oldId, newId); if (r === null) return spec; n++; return r; });
+    });
+    (sc.presets || []).forEach(p => {
+      ["set", "values"].forEach(k => { if (p[k] && Object.prototype.hasOwnProperty.call(p[k], oldId)) { p[k] = renameKey(p[k], oldId, newId); n++; } });
+    });
+    const mx = sc.matrixSheet;
+    if (mx && Array.isArray(mx.headers)) mx.headers = mx.headers.map(h => { const r = headRename(h, oldId, newId); if (r === null) return h; n++; return r; });
+    return n;
+  }
+  function renameRule(data, oldId, newId) {
+    const sc = data.scenario || {};
+    if (!sc.rules || !Object.prototype.hasOwnProperty.call(sc.rules, oldId)) return 0;
+    let n = 1;
+    sc.rules = renameKey(sc.rules, oldId, newId);
+    eachRule(data, r => mapRule(r, null, ref => (ref === oldId ? (n++, newId) : ref)));
+    if (sc.ruleMeta) {
+      if (sc.ruleMeta[oldId]) sc.ruleMeta = renameKey(sc.ruleMeta, oldId, newId);
+      if (sc.ruleMeta[alias(oldId)]) sc.ruleMeta = renameKey(sc.ruleMeta, alias(oldId), alias(newId));
+    }
+    if (Array.isArray(sc.phraseRules)) sc.phraseRules = sc.phraseRules.map(x => (x === oldId ? newId : x));
+    const rs = sc.rulesSheet;
+    if (rs && Array.isArray(rs.headers)) {
+      const c = rs.headers.findIndex(h => /^(rule\s*id|ruleid|id)$/i.test(String(h).trim()));
+      if (c >= 0) (rs.rows || []).forEach(r => { if (String(r[c]).trim() === alias(oldId)) r[c] = alias(newId); });
+    }
+    return n;
+  }
+  /* a saved run in the renamed vocabulary, so the impact preview compares
+     like with like: a pure rename changes the shape of nothing */
+  function renameRun(run, renames) {
+    const acts = (renames && renames.activities) || {}, vars = (renames && renames.variables) || {};
+    const ra = id => (Object.prototype.hasOwnProperty.call(acts, id) ? acts[id] : id);
+    const rv = id => (Object.prototype.hasOwnProperty.call(vars, id) ? vars[id] : id);
+    const keys = (o, f) => { const out = {}; Object.keys(o || {}).forEach(k => { out[f(k)] = o[k]; }); return out; };
+    return Object.assign({}, run, {
+      answers: keys(run.answers, rv), overrides: keys(run.overrides, rv), taskOverrides: keys(run.taskOverrides, ra),
+      includedKeys: (run.includedKeys || []).map(ra), excludedKeys: (run.excludedKeys || []).map(ra)
+    });
+  }
+
+  /* The task a person means when they type into a predecessor field: an id
+     (any case), the picker's own "id — name" text, a whole name, or a part of
+     a name that only one task has. A miss explains itself - several matches
+     are listed, nothing found suggests the nearest id - so an unknown id is
+     caught while typing, not as a validation error after Save. */
+  function matchActivity(activities, text, selfId) {
+    const acts = activities || [];
+    const raw = String(text || "").trim();
+    if (!raw) return { error: "Type a task id or part of its name." };
+    const lead = raw.split(/\s+[—–-]\s+/)[0].trim();           // "id — name"
+    const low = raw.toLowerCase(), leadLow = lead.toLowerCase();
+    const pick = a => (a.id === selfId ? { error: "A task cannot depend on itself." } : { id: a.id });
+    let hit = acts.find(a => a.id === raw || a.id === lead) || acts.find(a => a.id.toLowerCase() === low || a.id.toLowerCase() === leadLow);
+    if (hit) return pick(hit);
+    hit = acts.find(a => String(a.name || "").toLowerCase() === low);
+    if (hit) return pick(hit);
+    const part = acts.filter(a => String(a.name || "").toLowerCase().includes(low) && a.id !== selfId);
+    if (part.length === 1) return pick(part[0]);
+    if (part.length > 1) return { error: part.length + " tasks match '" + raw + "' - pick one from the list.", candidates: part.slice(0, 8).map(a => a.id) };
+    /* one edit away from an id: a typo, not a different task */
+    const near = acts.map(a => a.id).find(id => {
+      const x = id.toLowerCase();
+      if (Math.abs(x.length - leadLow.length) > 1) return false;
+      let i = 0, j = 0, diff = 0;
+      while (i < x.length && j < leadLow.length) {
+        if (x[i] === leadLow[j]) { i++; j++; continue; }
+        if (++diff > 1) return false;
+        if (x.length > leadLow.length) i++; else if (leadLow.length > x.length) j++; else { i++; j++; }
+      }
+      return diff + (x.length - i) + (leadLow.length - j) <= 1;
+    });
+    return { error: "No task with id or name '" + raw + "'" + (near ? " - did you mean '" + near + "'?" : ".") };
+  }
+
   /* An edited condition is authored text from now on: it is exported as the
      row's Include Expression (which wins over the Scenario Matrix on
      re-import), and the workbook's own phrase and explanation are dropped
@@ -219,6 +396,6 @@
     return scenario.versions;
   }
 
-  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias, derivationToText, textToDerivation };
+  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias, derivationToText, textToDerivation, checkId, renameActivity, renameVariable, renameRule, renameRun, matchActivity };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.admin;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

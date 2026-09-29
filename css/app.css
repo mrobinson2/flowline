@@ -274,6 +274,27 @@ textarea.input.admin-expr { font-family: ui-monospace, SFMono-Regular, Menlo, mo
 .admin-suggest .chip:hover { color: var(--text); border-color: var(--accent); }
 .admin-blocked { font-size: 11.5px; background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.35); border-radius: 6px; padding: 6px 8px; }
 .admin-blocked ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-2); }
+.admin-details .admin-field { display: flex; flex-direction: column; gap: 3px; margin: 0; }
+.admin-details .admin-field > span:first-child { font-size: 11px; font-weight: 600; color: var(--text-2); }
+.admin-details .admin-field .input { margin-bottom: 0; }
+.admin-id-input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+textarea.input.admin-desc { font: inherit; font-size: 12.5px; resize: vertical; }
+.pred-picker { display: flex; flex-direction: column; gap: 6px; }
+.pred-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.pred-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--panel-2); border-radius: 999px; padding: 2px 4px 2px 9px; font-size: 12px; max-width: 100%; }
+.pred-chip .pred-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.pred-chip code { font-size: 10.5px; color: var(--muted); }
+.pred-chip.missing { border-color: #EF4444; }
+.pred-chip.missing .pred-name { color: #FCA5A5; font-style: italic; }
+:root[data-theme="light"] .pred-chip.missing .pred-name { color: #B91C1C; }
+.pred-x { border: 0; background: transparent; color: var(--text-2); font-size: 14px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.pred-x:hover { color: var(--text); }
+.pred-add { display: flex; gap: 6px; }
+.pred-add .input { margin-bottom: 0; flex: 1 1 auto; }
+.pred-msg { font-size: 11.5px; color: var(--text-2); min-height: 1em; }
+.pred-msg:empty { display: none; }
+.pred-msg.bad { color: #FCA5A5; }
+:root[data-theme="light"] .pred-msg.bad { color: #B91C1C; }
 .admin-add { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-2); display: flex; flex-direction: column; gap: 6px; }
 .admin-add .designer-row .input:not(.short) { flex: 1 1 auto; }
 .admin-diff { font-size: 11.5px; color: var(--muted); }
