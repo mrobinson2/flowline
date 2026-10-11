@@ -48,6 +48,7 @@
       taxonomy: (override && override.taxonomy) || VSM.data.taxonomy,
       scenario: (override && override.scenario) || VSM.data.scenario
     };
+    const migrated = migrateReserved(candidate);
     /* validate.run can throw rather than return on pathological input (deep
        rule nesting used to overflow the stack). At startup there is nobody to
        catch it, and an abort here leaves a blank page with no way to clear the
@@ -55,6 +56,7 @@
     let issues;
     try { issues = VSM.validate.run(candidate.process, candidate.taxonomy, candidate.scenario); }
     catch (e) { issues = { errors: ["the saved data could not be checked: " + e.message], warnings: [] }; }
+    issues.warnings.push(...migrated);
     lastIssues = issues;
     if (issues.errors.length) {
       // keep the working data on screen and say why the new set was refused
@@ -1196,6 +1198,15 @@
   }
   /* The saved override must be a plain object. A stored scalar or array parses
      without throwing and then silently discards anything assigned to it. */
+  /* A copy saved before 1.6.4 may carry a variable named all, any or not,
+     which validate.js now refuses. Rename it on the way in (js/admin.js) so
+     the copy still loads; the rename is persisted with the next save.
+     -> warning lines naming what moved */
+  function migrateReserved(candidate) {
+    if (!VSM.admin || !candidate || !candidate.scenario || candidate.scenario === VSM.data.scenario) return [];
+    const moved = VSM.admin.migrateReservedIds({ process: candidate.process, scenario: candidate.scenario });
+    return moved.map(m => "variable '" + m.from + "' was renamed to '" + m.to + "': rules read all, any and not as combinators, so that name is reserved since 1.6.4.");
+  }
   function readOverride() {
     let o = null;
     try { o = JSON.parse(localStorage.getItem(DATA_KEY) || "null"); } catch (e) { o = null; }
@@ -1497,11 +1508,13 @@
            that is broken against the shipped files, persists it, and breaks
            every later page load. */
         let issues;
+        const moved = migrateReserved({ process: override.process || VSM.data.process, scenario: override.scenario || VSM.data.scenario });
         try {
           issues = VSM.validate.run(override.process || VSM.data.process,
                                     override.taxonomy || VSM.data.taxonomy,
                                     override.scenario || VSM.data.scenario);
         } catch (err) { throw new Error("the file could not be checked: " + err.message); }
+        issues.warnings.push(...moved);
         if (issues.errors.length) { renderIssues(issues); throw new Error(issues.errors[0]); }
         writeOverride(override);
         /* Only claim success if init() actually accepted the data; toast()
@@ -1531,7 +1544,9 @@
       taxonomy: loaded.taxonomy || data.taxonomy,
       scenario: loaded.scenario || data.scenario
     };
+    const moved = migrateReserved(candidate);
     const issues = VSM.validate.run(candidate.process, candidate.taxonomy, candidate.scenario);
+    issues.warnings.push(...moved);
     lastIssues = issues;
     if (issues.errors.length) {
       renderIssues(issues);

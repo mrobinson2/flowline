@@ -42,7 +42,7 @@ The questions the sidebar asks, in sidebar order, plus the derived values the en
 | **↑ / ↓** | Moves the question within the list, which is the sidebar order. The whole new order is one staged change. |
 | **Details** | Edit the **id**, the **label** (the question people read) and the **help text** under it. A label cannot be empty. See [Renaming ids](#renaming-ids). |
 | **Retire** | Removes a question, but only when nothing still reads it. When something does, the retire is refused and every blocker is listed: an activity condition (including duration overrides and multipliers), a named rule, a derivation, a *shown when* or *enabled when* gate, or a preset that sets it. Change those first. Retiring a question you added in the same session leaves no trace in the log. |
-| **Add variable** | The form under the list. **Id** must start with a letter and use only letters, digits and `_`. `R_` is reserved for rules, and the id must not already be a variable or rule. Also: the **label**, the **type** (yes / no, one of, any of), the **options** (comma-separated, at least two for a choice), the **section** (1–6) and the **group** heading it sits under. A blank group uses the last group in that section. A new yes/no defaults to No, a new choice to its first option, and a new any-of to nothing. |
+| **Add variable** | The form under the list. **Id** must start with a letter and use only letters, digits and `_`. `R_` is reserved for rules, `all`, `any` and `not` are reserved for the rule combinators, and the id must not already be a variable or rule. Also: the **label**, the **type** (yes / no, one of, any of), the **options** (comma-separated, at least two for a choice), the **section** (1–6) and the **group** heading it sits under. A blank group uses the last group in that section. A new yes/no defaults to No, a new choice to its first option, and a new any-of to nothing. |
 
 A new question does nothing until something reads it. Reference it from a rule or an activity condition.
 
@@ -84,7 +84,7 @@ An id is a name other things point at. Renaming one rewrites every pointer in th
 
 **Id rules**
 - Activity ids start with a letter or digit and use letters, digits, `-`, `_` or `.`. They must be unique among activities.
-- Question and rule ids start with a letter and use letters, digits and `_`. They must be unique across questions and rules. `R_` is only for rules.
+- Question and rule ids start with a letter and use letters, digits and `_`. They must be unique across questions and rules. `R_` is only for rules. `all`, `any` and `not` are refused: a rule object is keyed by question id, and those three keys are read as combinators first, so a question of that name could never be read by a rule.
 
 A question and a named rule may share a name, and they are different things: renaming the question `aiWorkload` leaves the rule `R_aiWorkload` alone.
 

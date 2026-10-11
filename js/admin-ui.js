@@ -400,6 +400,7 @@ VSM.adminUI = (function () {
         const fail = m => { addErr.appendChild(h("div", { class: "bad" }, m)); };
         if (!ID.test(id)) return fail("The id must start with a letter and use only letters, digits and _.");
         if (/^R_/.test(id)) return fail("R_ is reserved for rule names.");
+        if (["all", "any", "not"].includes(id)) return fail("'" + id + "' is reserved: rules read all, any and not as combinators.");
         if (attrs().some(a => a.id === id) || ruleIds().includes(id)) return fail("'" + id + "' is already a variable or rule.");
         if (!label) return fail("Give it a label - it is the question people answer.");
         if (type !== "boolean" && opts.length < 2) return fail("A choice needs at least two options.");

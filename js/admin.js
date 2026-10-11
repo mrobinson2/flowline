@@ -255,6 +255,10 @@
     return out;
   }
   const ACT_ID = /^[A-Za-z0-9][A-Za-z0-9_.\-]*$/, VAR_ID = /^[A-Za-z][A-Za-z0-9_]*$/;
+  /* rule objects are keyed by variable id, and evaluate() reads these keys as
+     combinators before anything else: a variable so named would validate and
+     every rule on it would silently never match */
+  const COMBINATORS = ["all", "any", "not"];
   /* -> null when newId may replace oldId, else the reason it may not */
   function checkId(data, kind, oldId, newId) {
     const id = String(newId || "").trim();
@@ -269,9 +273,27 @@
     if (kind === "variable" && /^R_/.test(id)) return "R_ is reserved for rule names.";
     const bare = kind === "rule" ? id.replace(/^R_/, "") : id;
     if (!VAR_ID.test(bare)) return "An id must start with a letter and use only letters, digits and _.";
+    if (COMBINATORS.includes(bare)) return "'" + bare + "' is reserved: rules read all, any and not as combinators.";
     const taken = (sc.attributes || []).map(a => a.id).concat(Object.keys(sc.rules || {})).filter(x => x !== oldId);
     if (taken.includes(id) || taken.includes(bare) || taken.includes(alias(bare))) return "'" + id + "' is already a variable or rule.";
     return null;
+  }
+  /* Copies saved before 1.6.4 can carry a variable named all, any or not (the
+     importer's placeholder for a workbook without conditions was "all"). Give
+     each a safe id; every pointer follows through renameVariable, and the
+     combinator keys are untouched because mapRule reads them first.
+     -> [{ from, to }] in attribute order; [] when there was nothing to do */
+  function migrateReservedIds(data) {
+    const sc = (data && data.scenario) || {};
+    const moved = [];
+    (sc.attributes || []).filter(a => a && COMBINATORS.includes(a.id)).forEach(a => {
+      const from = a.id;
+      let to = from + "Steps", n = 2;
+      while (checkId(data, "variable", from, to)) to = from + "Steps" + n++;
+      renameVariable(data, from, to);
+      moved.push({ from, to });
+    });
+    return moved;
   }
   function renameActivity(data, oldId, newId) {
     let n = 0;
@@ -396,6 +418,6 @@
     return scenario.versions;
   }
 
-  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias, derivationToText, textToDerivation, checkId, renameActivity, renameVariable, renameRule, renameRun, matchActivity };
+  VSM.admin = { referencesTo, impact, pushVersion, setCondition, ruleToText, textToRule, alias, derivationToText, textToDerivation, checkId, migrateReservedIds, renameActivity, renameVariable, renameRule, renameRun, matchActivity };
   if (typeof module !== "undefined" && module.exports) module.exports = VSM.admin;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);
