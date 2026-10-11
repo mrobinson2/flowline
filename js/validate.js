@@ -100,6 +100,7 @@ VSM.validate = (function () {
     scenarioCfg.attributes.forEach((a, i) => {
       const at = "scenario attribute #" + (i + 1) + (a && a.id ? " (" + a.id + ")" : "");
       if (!a || !ID.test(a.id || "")) { err(at + ": needs an id of letters, digits, hyphens or underscores, starting with a letter."); return; }
+      if (["all", "any", "not"].includes(a.id)) { err(at + ": '" + a.id + "' is reserved. Rules read the keys all, any and not as combinators, so a rule on this attribute would silently never match."); return; }
       if (attrs.has(a.id)) { err(at + ": duplicate attribute id."); return; }
       if (!["boolean", "enum", "multi"].includes(a.type)) { err(at + ": type must be boolean, enum or multi."); return; }
       if (a.type !== "boolean" && (!Array.isArray(a.options) || !a.options.length)) { err(at + ": " + a.type + " attributes need an options array."); return; }

@@ -1,3 +1,30 @@
+# Flowline 1.6.4
+
+Prepared 10 October 2026 from 1.6.3. A post-release review of 1.6.3 found that a variable could be named `all`, `any` or `not`.
+
+## Fixed
+
+1. **A variable or rule cannot be named `all`, `any` or `not`.** A rule object is keyed by variable id, and the engine reads those three keys as combinators before anything else, so a variable of that name would validate and a rule on it would never be read as a rule. Admin mode's rename and add-variable forms now refuse the name and say why, and the validator refuses an attribute so named from any source (import, JSON, a linked folder, a saved copy).
+
+2. **The importer's placeholder is `allSteps` now.** A workbook with no Applies When phrases got one switch named `all`, labelled *All steps*: the reserved name, shipped by the tool itself since 1.0. New imports mint `allSteps`.
+
+3. **Saved copies that carry the old name still load.** A browser copy, JSON bundle or linked folder written by an earlier release is renamed on the way in (`all` becomes `allSteps`; a name already in use gets a numeric suffix). Every pointer follows (presets, implies, conditions), the combinator keys are untouched, the rename is listed under warnings, and the next save persists it.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     110 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (641 KB)
+```
+
+Two new regression groups: the first drives `checkId`, the validator and the admin overlay's add form and failed on each hole before the fix; the second imports a workbook without conditions, migrates a legacy copy through the app's startup and JSON paths, and holds combinator keys and preset keys apart.
+
+---
+
 # Flowline 1.6.3
 
 Prepared 29 September 2026 from 1.6.2.

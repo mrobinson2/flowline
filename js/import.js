@@ -996,7 +996,10 @@
       }
     } else {
       scenario = {
-        attributes: attributes.length ? attributes : [{ id: "all", label: "All steps", type: "boolean", default: true }],
+        /* "allSteps", not "all": rule objects are keyed by variable id and
+           all/any/not are the combinators, so a variable named all could never
+           be read by a rule (validate.js refuses it since 1.6.4) */
+        attributes: attributes.length ? attributes : [{ id: "allSteps", label: "All steps", type: "boolean", default: true }],
         rules: Object.assign(Object.create(null), namedRules, sheetRules),
         presets: [
           { id: "everything", label: "Every step (full map)", set: attributes.reduce((o, a) => (o[a.id] = true, o), Object.create(null)) },

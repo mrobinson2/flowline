@@ -2232,5 +2232,103 @@ function form(extra = {}) {
     assert.ok(applied.candidate.scenario.versions.some(v => v.target === "variable serviceTier id" && v.author === "A. Tester"));
   });
 
+  await test("1.6.4: a variable or rule cannot take a combinator's name (all, any, not)", () => {
+    /* rule objects are keyed by variable id, and evaluate() reads the keys
+       all, any and not as combinators first. A variable of that name would
+       compile and validate, and every rule on it would silently never match. */
+    const A = V.admin;
+    const d0 = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    ["all", "any", "not"].forEach(word => {
+      assert.ok(/reserved/.test(A.checkId(d0, "variable", "serviceTier", word) || ""), "rename a variable to " + word);
+      assert.ok(/reserved/.test(A.checkId(d0, "rule", "drRequired", word) || ""), "rename a rule to " + word);
+      assert.ok(/reserved/.test(A.checkId(d0, "rule", "drRequired", "R_" + word) || ""), "rename a rule to R_" + word);
+      /* the importer's path: an attribute of that name in the data is an error */
+      const d = clone(d0);
+      d.scenario.attributes.push({ id: word, label: word, type: "boolean", default: false });
+      const errors = V.validate.run(d.process, d.taxonomy, d.scenario).errors;
+      assert.ok(errors.some(e => e.includes("'" + word + "'") && /reserved/.test(e)), word + " attribute: " + JSON.stringify(errors));
+    });
+    assert.equal(A.checkId(d0, "variable", "serviceTier", "allowed"), null, "a longer word that starts the same is fine");
+    assert.equal(A.checkId(d0, "variable", "serviceTier", "notes"), null);
+
+    /* the overlay's add-variable form refuses it before it reaches the list */
+    const create = tag => {
+      const n = fakeNode(tag);
+      n.events = {};
+      n.addEventListener = (event, handler) => { n.events[event] = handler; };
+      n.remove = () => { n.removed = true; };
+      return n;
+    };
+    const body = create("body");
+    const context = vm.createContext({ VSM: { ...V }, setTimeout: () => 0, document: {
+      body, getElementById: () => null, createElement: create, querySelector: () => null,
+      createTextNode: text => ({ text: String(text) }), addEventListener() {}, removeEventListener() {}
+    } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/admin-ui.js"), "utf8"), context);
+    const d = clone(d0);
+    context.VSM.adminUI.open(d, { runs: [], onApply: () => {} });
+    const all = n => [n, ...(n.children || []).flatMap(all)];
+    const textOf = n => all(n).filter(x => x.text !== undefined).map(x => x.text).join("");
+    const click = (root, label) => { const b = all(root).find(n => n.tag === "button" && textOf(n).startsWith(label)); assert.ok(b, label + " exists"); b.events.click(); };
+    click(body, "Variables");
+    const ph = n => (n.attrs && n.attrs.placeholder) || n.placeholder || "";
+    const idInput = all(body).find(n => n.tag === "input" && /^id, e\.g\./.test(ph(n)));
+    const labelInput = all(body).find(n => n.tag === "input" && /^Question shown/.test(ph(n)));
+    const optionsInput = all(body).find(n => n.tag === "input" && /^options, comma/.test(ph(n)));
+    assert.ok(idInput && labelInput && optionsInput, "the add form rendered");
+    const typeSelect = all(body).find(n => n.tag === "select" && (n.children || []).some(o => o.attrs && o.attrs.value === "boolean"));
+    assert.ok(typeSelect, "the type select rendered");
+    idInput.value = "not"; labelInput.value = "Not?"; optionsInput.value = ""; typeSelect.value = "boolean";
+    click(body, "+ Add variable");
+    assert.ok(!d.scenario.attributes.some(a => a.id === "not"), "'not' was added as a variable");
+    const feedback = all(body).filter(n => n.className === "bad").map(textOf).join(" | ");
+    assert.ok(/reserved/.test(feedback), "the form explains: " + feedback);
+  });
+
+  await test("1.6.4: a workbook with no conditions gets a placeholder named allSteps, and saved copies that carry the old 'all' migrate on load", async () => {
+    /* the importer used to mint { id: "all", label: "All steps" } as the one
+       switch of a workbook that has no Applies When phrases - the reserved
+       name in the wild. New imports get a safe id; copies saved before 1.6.4
+       are renamed on the way in (every pointer follows, combinators do not). */
+    const heads = ["ID", "Task", "Current Lead Time (hrs)", "Current Cycle Time (hrs)"];
+    const r = V.import.fromSheets({ "Task List": [heads, ["A", "Only step", 10, 2]] }, { source: "plain.csv" });
+    assert.deepEqual(r.report.errors, []);
+    assert.deepEqual(r.scenario.attributes.map(a => a.id), ["allSteps"]);
+    assert.deepEqual(V.validate.run(r.process, r.taxonomy, r.scenario).errors, []);
+
+    /* the migration itself: pointers follow, combinator keys stay, collisions get a suffix */
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    d.scenario.attributes.push({ id: "all", label: "All steps", type: "boolean", default: true },
+                               { id: "not", label: "Not", type: "boolean", default: false },
+                               { id: "notSteps", label: "Taken", type: "boolean", default: false });
+    /* no rule can read a variable named all (evaluate() takes the key as a
+       combinator), so the pointers a legacy copy can carry are elsewhere:
+       presets and implies */
+    d.process.activities[0].when = { all: [{ serviceTier: "Tier 1" }, { not: { productionIncluded: false } }] };
+    d.scenario.presets.push({ id: "legacy", label: "Legacy", set: { all: true, not: false } });
+    const moved = V.admin.migrateReservedIds(d);
+    assert.deepEqual(moved, [{ from: "all", to: "allSteps" }, { from: "not", to: "notSteps2" }]);
+    assert.deepEqual(d.scenario.attributes.slice(-3).map(a => a.id), ["allSteps", "notSteps2", "notSteps"]);
+    assert.deepEqual(clone(d.process.activities[0].when), { all: [{ serviceTier: "Tier 1" }, { not: { productionIncluded: false } }] }, "combinator keys untouched");
+    assert.deepEqual(clone(d.scenario.presets.at(-1).set), { allSteps: true, notSteps2: false }, "preset keys moved");
+    assert.deepEqual(V.validate.run(d.process, d.taxonomy, d.scenario).errors, []);
+    assert.deepEqual(V.admin.migrateReservedIds(d), [], "idempotent");
+
+    /* startup: a copy saved by an older release loads instead of being refused */
+    const legacy = { process: { units: "hours", activities: [{ id: "A", name: "A", category: "value", duration: { current: 1, optimal: 1 }, predecessors: [] }] },
+                     scenario: { attributes: [{ id: "all", label: "All steps", type: "boolean", default: true }], rules: {}, presets: [] }, processSource: "loaded" };
+    const h = appHarness(dataset([task("Z")]));
+    h.storage.set("vsm.data.v1", JSON.stringify(legacy));
+    assert.equal(h.api.loadData(), true, "the saved copy loaded: " + JSON.stringify(h.messages));
+    assert.deepEqual(clone(h.api.getData().scenario.attributes.map(a => a.id)), ["allSteps"]);
+    assert.ok(!h.messages.some(m => m.error), JSON.stringify(h.messages));
+
+    /* a JSON bundle written by an older release loads the same way */
+    const h2 = appHarness(dataset([task("Z")]));
+    await new Promise(resolve => { h2.api.loadJSONFile({ name: "old.json", content: JSON.stringify({ process: legacy.process, scenario: legacy.scenario }) }); setTimeout(resolve, 0); });
+    assert.ok(!h2.messages.some(m => m.error), JSON.stringify(h2.messages));
+    assert.deepEqual(clone(h2.api.getData().scenario.attributes.map(a => a.id)), ["allSteps"]);
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
