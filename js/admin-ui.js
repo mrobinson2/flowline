@@ -65,6 +65,45 @@ VSM.adminUI = (function () {
       else if (before !== after) pending.push({ target, before, after });
       issues.hidden = true;                        // the last check was of an older candidate
     }
+    /* renames made in this session: ORIGINAL (live) id -> current id, per
+       kind. The live data keeps the original ids until Apply, so lookups of
+       "what was it before" go through origOf; the impact preview and the
+       app's state migration read the same map. */
+    const renames = { activities: {}, variables: {}, rules: {} };
+    const origOf = (kind, cur) => Object.keys(renames[kind]).find(o => renames[kind][o] === cur) || cur;
+    function noteRename(kind, cur, next) {
+      const orig = origOf(kind, cur);
+      if (next === orig) delete renames[kind][orig]; else renames[kind][orig] = next;
+      return orig;
+    }
+    const activeRenames = () => (Object.keys(renames.activities).length || Object.keys(renames.variables).length)
+      ? { activities: renames.activities, variables: renames.variables } : undefined;
+
+    /* one small form for the id and the words around it; onSave returns an
+       error string to show, or nothing when it staged the change */
+    function detailsForm(fields, onSave) {
+      const inputs = {};
+      const err = h("div", { class: "admin-feedback" });
+      const rows = fields.map(f => {
+        const el = f.multiline ? h("textarea", { class: "input admin-desc", rows: "3" }) : h("input", { class: "input" + (f.key === "id" ? " admin-id-input" : ""), spellcheck: "false" });
+        el.value = f.value || "";
+        inputs[f.key] = el;
+        return h("label", { class: "field admin-field" }, h("span", null, f.label), el, f.hint ? h("span", { class: "hint" }, f.hint) : null);
+      });
+      const save = () => {
+        err.innerHTML = "";
+        const values = {};
+        Object.keys(inputs).forEach(k => { values[k] = inputs[k].value; });
+        const problem = onSave(values);
+        if (problem) { err.appendChild(h("div", { class: "bad" }, problem)); return; }
+        editing = null; render();
+      };
+      return h("div", { class: "admin-editor admin-details" }, rows, err,
+        h("div", { class: "admin-editor-actions" },
+          h("span", { class: "hint" }, "Renaming an id rewrites everything that points at it."),
+          h("button", { class: "ghost small", type: "button", onclick: () => { editing = null; render(); } }, "Cancel"),
+          h("button", { class: "primary small", type: "button", onclick: save }, "Stage change")));
+    }
 
     const overlay = h("div", { id: "admin-overlay", class: "overlay", role: "dialog", "aria-modal": "true", "aria-label": "Admin mode" });
     const box = h("div", { class: "overlay-box designer admin" });
@@ -193,10 +232,24 @@ VSM.adminUI = (function () {
             h("code", { class: "admin-id" }, /^R_/.test(id) ? id : "R_" + id),
             h("span", { class: "designer-count", title: "Activities whose condition names this rule" }, used(id) + " act"),
             isStaged(target) ? h("span", { class: "admin-badge" }, "staged") : null,
+            h("button", { class: "ghost small", type: "button", title: "Rename this rule", onclick: () => { editing = editing === "ruled:" + id ? null : "ruled:" + id; render(); } }, editing === "ruled:" + id ? "Close" : "Rename"),
             h("button", { class: "ghost small", type: "button", onclick: () => { editing = editing === key ? null : key; render(); } }, editing === key ? "Close" : "Edit")),
-          editing === key
+          editing === "ruled:" + id
+            ? detailsForm([{ key: "id", label: "Rule id", value: VSM.admin.alias(id), hint: "Referenced as R_<id> in expressions; every reference follows the rename." }], v => {
+              const typed = String(v.id || "").trim();
+              const next = /^R_/.test(id) ? VSM.admin.alias(typed.replace(/^R_/, "")) : typed.replace(/^R_/, "");
+              if (next === id) return null;
+              const problem = VSM.admin.checkId(work, "rule", id, next);
+              if (problem) return problem;
+              VSM.admin.renameRule(work, id, next);
+              const orig = noteRename("rules", id, next);
+              stage("rule " + orig + " id", VSM.admin.alias(orig), VSM.admin.alias(next));
+              note = "Renamed " + VSM.admin.alias(id) + " to " + VSM.admin.alias(next) + ".";
+              return null;
+            })
+          : editing === key
             ? editor(work.scenario.rules[id], rule => {
-              const before = text(data.scenario.rules[id]);
+              const before = text(data.scenario.rules[origOf("rules", id)]);
               work.scenario.rules[id] = rule;
               stage(target, before, text(rule));
             })
@@ -215,15 +268,40 @@ VSM.adminUI = (function () {
       const acts = work.process.activities.filter(a => !q || a.id.toLowerCase().includes(q) || String(a.name || "").toLowerCase().includes(q)
         || (a.when !== undefined && text(a.when).toLowerCase().includes(q)));
       acts.forEach(a => {
-        const key = "act:" + a.id, target = "activity " + a.id + " condition";
-        const live = data.process.activities.find(x => x.id === a.id);
+        const key = "act:" + a.id, target = "activity " + a.id + " condition", dkey = "actd:" + a.id;
+        const live = data.process.activities.find(x => x.id === origOf("activities", a.id));
         list.appendChild(h("div", { class: "admin-row" + (isStaged(target) ? " staged" : "") },
           h("div", { class: "admin-row-head" },
             h("span", { class: "designer-name", title: a.id }, a.name || a.id),
             h("code", { class: "admin-id muted" }, a.id),
             isStaged(target) ? h("span", { class: "admin-badge" }, "staged") : null,
-            h("button", { class: "ghost small", type: "button", onclick: () => { editing = editing === key ? null : key; render(); } }, editing === key ? "Close" : "Edit")),
-          editing === key
+            h("button", { class: "ghost small", type: "button", title: "Id, name and description", onclick: () => { editing = editing === dkey ? null : dkey; render(); } }, editing === dkey ? "Close" : "Details"),
+            h("button", { class: "ghost small", type: "button", title: "Inclusion condition", onclick: () => { editing = editing === key ? null : key; render(); } }, editing === key ? "Close" : "Edit")),
+          editing === dkey
+            ? detailsForm([
+              { key: "id", label: "Id", value: a.id, hint: "Predecessors, declared handoffs and the workbook's Scenario Matrix follow a rename." },
+              { key: "name", label: "Name", value: a.name || "" },
+              { key: "description", label: "Description", value: a.description || "", multiline: true }
+            ], v => {
+              const next = String(v.id || "").trim(), name = String(v.name || "").trim(), desc = String(v.description || "").trim();
+              if (!name) return "Give the activity a name - it is the label on the chart.";
+              const problem = VSM.admin.checkId(work, "activity", a.id, next);
+              if (problem) return problem;
+              const orig = origOf("activities", a.id);
+              if (next !== a.id) {
+                const was = a.id;                        // renameActivity rewrites a.id in place
+                VSM.admin.renameActivity(work, was, next);
+                noteRename("activities", was, next);
+                stage("activity " + orig + " id", orig, next);
+              }
+              if (name !== (a.name || "")) { a.name = name; stage("activity " + orig + " name", (live && live.name) || "", name); }
+              if (desc !== (a.description || "")) {
+                if (desc) a.description = desc; else delete a.description;
+                stage("activity " + orig + " description", (live && live.description) || "", desc);
+              }
+              return null;
+            })
+          : editing === key
             ? editor(a.when === undefined ? true : a.when, rule => {
               VSM.admin.setCondition(a, rule);
               const was = live && live.when !== undefined ? text(live.when) : "TRUE";
@@ -234,7 +312,7 @@ VSM.adminUI = (function () {
       const box = h("input", { class: "input", type: "search", placeholder: "Search activities by name, id or condition", value: search });
       box.addEventListener("input", e => { search = e.target.value; const pos = e.target.selectionStart; render(); const b = document.querySelector("#admin-overlay input[type=search]"); if (b) { b.focus(); b.selectionStart = b.selectionEnd = pos; } });
       return h("div", null,
-        h("p", { class: "hint" }, "Each activity's inclusion condition. TRUE means always included. Showing " + acts.length + " of " + work.process.activities.length + "."),
+        h("p", { class: "hint" }, "Each activity's inclusion condition (Edit), and its id, name and description (Details). TRUE means always included. Showing " + acts.length + " of " + work.process.activities.length + "."),
         box, list);
     }
 
@@ -249,6 +327,7 @@ VSM.adminUI = (function () {
             h("code", { class: "admin-id" }, a.id),
             h("span", { class: "designer-name", title: a.label || "" }, a.label || ""),
             h("span", { class: "designer-count" }, a.type + (a.derived ? " · derived" : "") + (a.section ? " · §" + a.section : "")),
+            h("button", { class: "ghost small", type: "button", title: "Id, label and help text", onclick: () => { editing = editing === "vard:" + a.id ? null : "vard:" + a.id; render(); } }, editing === "vard:" + a.id ? "Close" : "Details"),
             h("button", { class: "ghost small", type: "button", title: "Move up", onclick: () => { if (move(attrs(), i, -1)) { restage(); render(); } } }, "↑"),
             h("button", { class: "ghost small", type: "button", title: "Move down", onclick: () => { if (move(attrs(), i, 1)) { restage(); render(); } } }, "↓"),
             h("button", {
@@ -268,6 +347,33 @@ VSM.adminUI = (function () {
                 render();
               }
             }, "Retire")));
+        if (editing === "vard:" + a.id) {
+          const liveA = data.scenario.attributes.find(x => x.id === origOf("variables", a.id));
+          row.appendChild(detailsForm([
+            { key: "id", label: "Id", value: a.id, hint: "Every condition, rule, derivation, visibility gate, preset and matrix column that reads it follows a rename." },
+            { key: "label", label: "Label", value: a.label || "" },
+            { key: "help", label: "Help text", value: a.help || "", multiline: true }
+          ], v => {
+            const next = String(v.id || "").trim(), label = String(v.label || "").trim(), help = String(v.help || "").trim();
+            if (!label) return "Give it a label - it is the question people answer.";
+            const problem = VSM.admin.checkId(work, "variable", a.id, next);
+            if (problem) return problem;
+            const orig = origOf("variables", a.id);
+            if (next !== a.id) {
+              const was = a.id;                          // renameVariable rewrites a.id in place
+              VSM.admin.renameVariable(work, was, next);
+              noteRename("variables", was, next);
+              stage("variable " + orig + " id", orig, next);
+              if (isStaged("variable order")) restage();
+            }
+            if (label !== (a.label || "")) { a.label = label; stage("variable " + orig + " label", (liveA && liveA.label) || "", label); }
+            if (help !== (a.help || "")) {
+              if (help) a.help = help; else delete a.help;
+              stage("variable " + orig + " help", (liveA && liveA.help) || "", help);
+            }
+            return null;
+          }));
+        }
         if (blocked && blocked.id === a.id) {
           row.appendChild(h("div", { class: "admin-blocked" },
             h("div", { class: "bad" }, "Cannot retire " + a.id + ": " + blocked.refs.length + " place" + (blocked.refs.length === 1 ? "" : "s") + " still read it. Change these first."),
@@ -336,7 +442,7 @@ VSM.adminUI = (function () {
 
     /* ----------------------------------------------------- impact preview */
     function impactView() {
-      const rows = VSM.admin.impact(data, work, runs);
+      const rows = VSM.admin.impact(data, work, runs, activeRenames());
       const changed = rows.filter(r => r.error || r.added.length || r.removed.length);
       const ids = (list, sign) => h("ul", { class: "admin-ids" }, list.map(id => h("li", null, sign + " " + actName(id) + " ", h("code", null, id))));
       const table = h("table", { class: "admin-impact" },
@@ -405,7 +511,7 @@ VSM.adminUI = (function () {
             saveAuthor(author);
             const candidate = VSM.deepClone(work);
             pending.forEach(p => VSM.admin.pushVersion(candidate.scenario, Object.assign({ author }, p)));
-            if (onApply(candidate, pending.slice()) !== false) close();
+            if (onApply(candidate, pending.slice(), JSON.parse(JSON.stringify(renames))) !== false) close();
           }
         }, "Apply " + n + " change" + (n === 1 ? "" : "s"));
         apply.disabled = !author.trim();

@@ -30,7 +30,7 @@ open index.html          # or xdg-open, or drag it into a browser
 
 No install, no server. It opens with sample data. If you would rather not clone, use **Code → Download ZIP**, extract, and open `index.html`.
 
-Fastest of all: download the single-file build from the [v1.6.2 release](https://github.com/mrobinson2/flowline/releases/tag/v1.6.2) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
+Fastest of all: download the single-file build from the [v1.6.3 release](https://github.com/mrobinson2/flowline/releases/tag/v1.6.3) — [`flowline.html`](https://github.com/mrobinson2/flowline/releases/latest/download/flowline.html), everything inlined, open it in a browser and you are running. (The `latest/download` link always serves the newest release; CI attaches the build to every tag.)
 
 Or build that same file yourself:
 
@@ -40,7 +40,7 @@ node tools/bundle.js     # writes dist/flowline.html with everything inlined
 
 ## Five views of the same schedule
 
-A screenshot tour of every view is in [docs/UI-VIEWS.md](docs/UI-VIEWS.md), and of the panels, designer and import/export tools in [docs/UI-TOOLS.md](docs/UI-TOOLS.md).
+A screenshot tour of every view is in [docs/UI-VIEWS.md](docs/UI-VIEWS.md), and of the panels, designer and import/export tools in [docs/UI-TOOLS.md](docs/UI-TOOLS.md). Admin mode has its own guide, [docs/ADMIN-MODE.md](docs/ADMIN-MODE.md), and every id that ships by default (questions, derived values, rules, presets, activities, phases, teams) is listed with its name and meaning in [docs/REFERENCE.md](docs/REFERENCE.md), generated from the data files.
 
 | View | Question it answers |
 |---|---|
@@ -76,7 +76,7 @@ The timeline views join in once tracking is in use: done rows step back with a g
 
 **Open process designer** (in the sidebar) edits what used to need a text editor: add, rename, reorder and delete stages and phases, assign phases to stages, move activities between phases, reorder rows, and sort every row into band order in one click. Changes happen on a working copy and apply only when the whole result validates — the same last-good-data contract as imports, so a half-finished edit can never blank the projector. Deleting a phase that still has activities moves them to the first remaining phase and says so.
 
-**Open admin mode** (beside it) edits which tasks fire, and when — without touching code or the spreadsheet. Named rules and each activity's inclusion condition are edited as expression text (`R_drRequired AND R_cloud`) with live compile feedback: the column of the mistake, a did-you-mean, completion of variable and rule names. Variables can be added, reordered and retired; retiring is blocked while anything still reads the variable, and the blockers are listed. Edits are staged, and the only way to apply them is through the **impact preview**: every saved scenario, plus what is on screen, is replayed against the live rules and the edited ones, and the table shows which tasks each one gains or loses. Applying asks who is making the change; each change passes the same validation gate as an import and is appended to a version log (author, time, before and after; last 100). Edits survive a round trip through the workbook as well as the JSON export: the Excel export writes the live Rules sheet, the Toggles sheet with sections, visibility and enable gates, option labels and derivations (a derived choice as ordered `value WHEN condition; …; ELSE value` cases), each edited task's Include Expression (which takes precedence over its Scenario Matrix row on re-import), and a Versions sheet.
+**Open admin mode** (beside it) edits which tasks fire, and when — without touching code or the spreadsheet ([full guide](docs/ADMIN-MODE.md)). Ids, names, labels and descriptions can be edited there too; renaming an id rewrites everything that points at it. Named rules and each activity's inclusion condition are edited as expression text (`R_drRequired AND R_cloud`) with live compile feedback: the column of the mistake, a did-you-mean, completion of variable and rule names. Variables can be added, reordered and retired; retiring is blocked while anything still reads the variable, and the blockers are listed. Edits are staged, and the only way to apply them is through the **impact preview**: every saved scenario, plus what is on screen, is replayed against the live rules and the edited ones, and the table shows which tasks each one gains or loses. Applying asks who is making the change; each change passes the same validation gate as an import and is appended to a version log (author, time, before and after; last 100). Edits survive a round trip through the workbook as well as the JSON export: the Excel export writes the live Rules sheet, the Toggles sheet with sections, visibility and enable gates, option labels and derivations (a derived choice as ordered `value WHEN condition; …; ELSE value` cases), each edited task's Include Expression (which takes precedence over its Scenario Matrix row on re-import), and a Versions sheet.
 
 ## Presentation mode
 

@@ -2070,5 +2070,167 @@ function form(extra = {}) {
     assert.deepEqual(bad, [], "display rules that override [hidden]: " + bad.join(", "));
   });
 
+  await test("1.6.3: renaming an activity, a question or a rule updates every reference and changes nothing else", async () => {
+    const A = V.admin;
+    const d0 = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const included = (d, sc) => V.schedule.build(d.process, d.taxonomy, V.rules.effective(d.scenario.attributes, sc, d.scenario.rules), d.scenario.rules, d.scenario.attributes).nodes.map(n => n.id);
+    const base = V.rules.defaults(d0.scenario.attributes);
+
+    /* ids are checked before anything moves */
+    assert.ok(/already/.test(A.checkId(d0, "activity", "arch-design", "arb")), "taken activity id");
+    assert.ok(/letter/.test(A.checkId(d0, "variable", "serviceTier", "9tier")), "bad variable id");
+    assert.ok(/reserved/.test(A.checkId(d0, "variable", "serviceTier", "R_tier")));
+    assert.ok(/already/.test(A.checkId(d0, "variable", "serviceTier", "drRequired")), "a rule or variable of that name exists");
+    assert.equal(A.checkId(d0, "activity", "arch-design", "solution-design"), null);
+
+    /* activity: predecessors and declared handoffs follow */
+    const d1 = clone(d0);
+    const n1 = A.renameActivity(d1, "arch-design", "solution-design");
+    assert.ok(n1 >= 5, "references updated: " + n1);
+    assert.ok(!JSON.stringify(d1.process).includes('"arch-design"'), "no ghost of the old id");
+    assert.equal(V.validate.run(d1.process, d1.taxonomy, d1.scenario).errors.length, 0);
+    const map1 = id => (id === "arch-design" ? "solution-design" : id);
+    assert.deepEqual(included(d1, base).sort(), included(d0, base).map(map1).sort());
+
+    /* question: conditions, rules, derivations, gates, presets, implies */
+    const d2 = clone(d0);
+    A.renameVariable(d2, "serviceTier", "tier");
+    A.renameVariable(d2, "aiWorkload", "mlWorkload");      // genAiWorkload implies it
+    /* nothing reads the old questions any more (the named RULE "aiWorkload"
+       is a different thing and rightly keeps its name) */
+    ["serviceTier", "aiWorkload"].forEach(old => {
+      assert.deepEqual(A.referencesTo(d2, old), [], "ghost references to " + old);
+      assert.ok(!d2.scenario.attributes.some(a => a.id === old), old + " still defined");
+    });
+    assert.ok(d2.scenario.rules.aiWorkload, "the rule of the same name is untouched");
+    assert.deepEqual(d2.scenario.attributes.find(a => a.id === "genAiWorkload").implies, ["mlWorkload"]);
+    assert.equal(V.validate.run(d2.process, d2.taxonomy, d2.scenario).errors.length, 0, JSON.stringify(V.validate.run(d2.process, d2.taxonomy, d2.scenario).errors.slice(0, 3)));
+    const moveAnswers = sc => { const o = Object.assign({}, sc); o.tier = o.serviceTier; delete o.serviceTier; o.mlWorkload = o.aiWorkload; delete o.aiWorkload; return o; };
+    [base, Object.assign({}, base, { serviceTier: "Tier 4" }), Object.assign({}, base, { genAiWorkload: true, serviceTier: "Tier 0" })].forEach((sc, i) =>
+      assert.deepEqual(included(d2, moveAnswers(sc)).sort(), included(d0, sc).sort(), "scenario " + i));
+
+    /* rule: the table key and every R_ reference */
+    const d3 = clone(d0);
+    A.renameRule(d3, "drRequired", "needsDr");
+    assert.ok(!d3.scenario.rules.drRequired && d3.scenario.rules.needsDr);
+    assert.ok(d3.process.activities.filter(a => JSON.stringify(a.when || null).includes('"needsDr"')).length >= 3);
+    assert.equal(V.validate.run(d3.process, d3.taxonomy, d3.scenario).errors.length, 0);
+    assert.deepEqual(included(d3, base).sort(), included(d0, base).sort());
+    /* the attribute of the same name is a different thing and keeps its id */
+    assert.ok(d3.scenario.attributes.some(a => a.id === "drRequired"));
+
+    /* impact: a pure rename changes the shape of no saved scenario */
+    const store = new Map();
+    global.localStorage = { getItem: k => store.get(k) || null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+    try {
+      const m = V.schedule.build(d0.process, d0.taxonomy, V.rules.effective(d0.scenario.attributes, base, d0.scenario.rules), d0.scenario.rules, d0.scenario.attributes);
+      const run = V.runs.record(m, { scenario: Object.assign({}, base, { serviceTier: "Tier 1" }), overrides: {}, taskOverrides: { "arch-design": true } }, "t1");
+      const both = clone(d0);
+      A.renameActivity(both, "arch-design", "solution-design");
+      A.renameVariable(both, "serviceTier", "tier");
+      const [row] = A.impact(d0, both, [run], { activities: { "arch-design": "solution-design" }, variables: { serviceTier: "tier" } });
+      assert.equal(row.added.length + row.removed.length, 0, JSON.stringify(row));
+    } finally { delete global.localStorage; }
+
+    /* the workbook: a rename survives export and re-import, matrix included */
+    const buf = fs.readFileSync(path.join(__dirname, "..", "fixture", "sample-value-stream.xlsx"));
+    const w0 = await V.import.fromWorkbook(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {});
+    const w = clone(w0);
+    A.renameVariable(w, "genAI", "genAiWorkload");
+    A.renameActivity(w, "44", "cloud-review");
+    assert.ok(w.scenario.matrixSheet.headers.includes("genAiWorkload") && !w.scenario.matrixSheet.headers.includes("genAI"));
+    assert.ok(w.scenario.matrixSheet.rows.some(r => r[0] === "cloud-review"));
+    const all = {}; w.process.activities.forEach(a => { all[a.id] = true; });
+    const wm = V.schedule.build(w.process, w.taxonomy, V.rules.defaults(w.scenario.attributes), w.scenario.rules, w.scenario.attributes, { derived: {}, tasks: all });
+    const sheets = {};
+    V.exportWorkbook.sheets(wm, { scenarioCfg: w.scenario, scenarioSummary: "" }).forEach(sh => { sheets[sh.name] = [sh.headers].concat(sh.rows.map(r => sh.headers.map(h => r[h] === undefined ? "" : r[h]))); });
+    const back = V.import.fromSheets(sheets, {});
+    assert.equal(back.report.errors.length, 0, JSON.stringify(back.report.errors));
+    const on = Object.assign(V.rules.defaults(w0.scenario.attributes), { genAI: true });
+    const onNew = Object.assign(V.rules.defaults(back.scenario.attributes), { genAiWorkload: true });
+    assert.deepEqual(included(back, onNew).sort(), included(w0, on).map(id => (id === "44" ? "cloud-review" : id)).sort());
+  });
+
+  await test("1.6.3: a predecessor is found by id or by name, and a miss says why", () => {
+    const acts = shipped.process.activities;
+    const m = (t, self) => V.admin.matchActivity(acts, t, self);
+    assert.equal(m("arch-design").id, "arch-design", "exact id");
+    assert.equal(m("  ARCH-DESIGN ").id, "arch-design", "id, any case and spacing");
+    assert.equal(m("Solution architecture design").id, "arch-design", "exact name");
+    assert.equal(m("arch-design — Solution architecture design").id, "arch-design", "the picker's own 'id — name' text");
+    assert.equal(m("architecture review board").id, "arb", "a unique part of a name");
+    const many = m("review");
+    assert.ok(!many.id && /tasks match/.test(many.error) && many.candidates.length > 1, JSON.stringify(many).slice(0, 200));
+    assert.ok(/No task/.test(m("no-such-step").error));
+    assert.ok(/itself/.test(m("arb", "arb").error), "cannot depend on itself");
+    assert.ok(/did you mean 'arch-design'/.test(m("arch-desgn").error), m("arch-desgn").error);
+  });
+
+  await test("1.6.3: docs/REFERENCE.md is the shipped data, not a copy that drifts", () => {
+    const gen = require(path.join(__dirname, "..", "tools", "reference.js"));
+    const committed = fs.readFileSync(gen.OUT, "utf8");
+    assert.ok(committed === gen.build(), "docs/REFERENCE.md is out of date with the data files - run: node tools/reference.js");
+    const d = shipped;
+    /* every id is in it */
+    d.process.activities.forEach(a => assert.ok(committed.includes("`" + a.id + "`"), "activity " + a.id));
+    d.scenario.attributes.forEach(a => assert.ok(committed.includes("`" + a.id + "`"), "variable " + a.id));
+    Object.keys(d.scenario.rules).forEach(id => assert.ok(committed.includes("`R_" + id + "`"), "rule " + id));
+  });
+
+  await test("1.6.3: admin mode renames through the real overlay: the preview shows no change and Apply carries the renames", () => {
+    /* the browser check caught a rename recorded after renameActivity had
+       already rewritten a.id - "renamed to itself", so the preview blamed a
+       pure rename for moving tasks. This drives the overlay itself. */
+    const create = tag => {
+      const n = fakeNode(tag);
+      n.events = {};
+      n.addEventListener = (event, handler) => { n.events[event] = handler; };
+      n.remove = () => { n.removed = true; };
+      return n;
+    };
+    const body = create("body");
+    const context = vm.createContext({ VSM: { ...V }, setTimeout: () => 0, document: {
+      body, getElementById: () => null, createElement: create, querySelector: () => null,
+      createTextNode: text => ({ text: String(text) }), addEventListener() {}, removeEventListener() {}
+    } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/admin-ui.js"), "utf8"), context);
+    const d = clone({ process: shipped.process, taxonomy: shipped.taxonomy, scenario: shipped.scenario });
+    const answers = Object.assign(V.rules.defaults(d.scenario.attributes), { serviceTier: "Tier 1" });
+    const m = V.schedule.build(d.process, d.taxonomy, V.rules.effective(d.scenario.attributes, answers, d.scenario.rules), d.scenario.rules, d.scenario.attributes);
+    const run = { runId: "current", name: "Current scenario", answers, overrides: {}, taskOverrides: {}, includedKeys: m.nodes.map(n => n.id) };
+    let applied = null;
+    context.VSM.adminUI.open(d, { runs: [run], onApply: (candidate, changes, renames) => { applied = { candidate, changes, renames }; } });
+
+    const all = n => [n, ...(n.children || []).flatMap(all)];
+    const textOf = n => all(n).filter(x => x.text !== undefined).map(x => x.text).join("");
+    const button = (root, label) => all(root).find(n => n.tag === "button" && textOf(n).startsWith(label));
+    const click = (root, label) => { const b = button(root, label); assert.ok(b, label + " exists"); b.events.click(); };
+    const rowFor = id => all(body).find(n => String(n.className || "").startsWith("admin-row") &&
+      all(n).some(c => c.tag === "code" && textOf(c) === id));
+    const rename = (id, next) => {
+      click(rowFor(id), "Details");
+      const input = all(rowFor(id)).find(n => n.tag === "input" && String(n.className || "").includes("admin-id-input"));
+      assert.ok(input, "id field for " + id);
+      input.value = next;
+      click(rowFor(id), "Stage change");
+    };
+    click(body, "Variables");
+    rename("serviceTier", "tier");
+    click(body, "Activities");
+    rename("arch-design", "solution-design");
+    click(body, "Preview impact");
+    const summary = all(body).find(n => n.className === "admin-summary");
+    assert.ok(summary, "the preview rendered");
+    assert.equal(textOf(summary), "The scenario does not change shape under these edits.", "a pure rename moved tasks: " + textOf(summary));
+    const who = all(body).find(n => String(n.className || "").includes("admin-author"));
+    who.value = "A. Tester"; who.events.input();
+    click(body, "Apply");
+    assert.ok(applied, "Apply reached the app");
+    assert.deepEqual(JSON.parse(JSON.stringify(applied.renames.variables)), { serviceTier: "tier" });
+    assert.deepEqual(JSON.parse(JSON.stringify(applied.renames.activities)), { "arch-design": "solution-design" });
+    assert.ok(applied.candidate.scenario.attributes.some(a => a.id === "tier"));
+    assert.ok(applied.candidate.scenario.versions.some(v => v.target === "variable serviceTier id" && v.author === "A. Tester"));
+  });
+
   console.log("\n" + passed + " regression groups passed, 0 failed");
 })().catch(e => { console.error(e); process.exitCode = 1; });

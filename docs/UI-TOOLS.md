@@ -91,7 +91,10 @@ that stays in the details panel where the predecessor list lives:
 ## Admin mode
 
 **Open admin mode** in the sidebar edits the rule layer: which tasks fire,
-and when. Four tabs over one working copy.
+and when. Four tabs over one working copy. This is the short version; the
+complete guide, including renaming ids and the expression language, is
+[ADMIN-MODE.md](ADMIN-MODE.md), and every built-in id is in
+[REFERENCE.md](REFERENCE.md).
 
 **Variables** — the questions, in sidebar order. Add one (id, label, yes/no
 or a choice, section), move it, or retire it. A retire is refused while any

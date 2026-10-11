@@ -1,3 +1,50 @@
+# Flowline 1.6.3
+
+Prepared 29 September 2026 from 1.6.2.
+
+## Added
+
+1. **Rename ids in admin mode, and edit the words around them.** Each tab gets a **Details** form: activities (id, name, description), questions (id, label, help text) and named rules (id). Renaming rewrites everything that points at the id:
+   - **Activities:** predecessors, declared handoffs, and the workbook's Scenario Matrix row.
+   - **Questions:** every condition, duration override and multiplier that reads it, plus named rules, derivations, shown-when and enabled-when gates, presets, *implies* lists and matrix column headers.
+   - **Rules:** every `R_` reference and the Rules sheet.
+   - Ids are checked before anything moves (format, uniqueness, `R_` reserved for rules).
+   - A question and a rule of the same name stay separate.
+   - The impact preview replays saved scenarios in the renamed vocabulary, so a pure rename shows no change.
+   - **Apply** moves your answers, derived overrides, per-task overrides, selection and saved scenarios to the new ids, and the version log records each rename, name, label, help and description change.
+
+2. **Predecessors by name.** The task edit form showed predecessors as a line of ids you had to know. Each predecessor is now a chip with the task's name and id, and a picker finds tasks by id, by name, or by a part of a name only one task has. A miss explains itself before anything is saved:
+   - several matches are listed;
+   - a near-miss id gets *did you mean*;
+   - a task cannot depend on itself;
+   - an id already in the data that names no task is flagged.
+
+3. **[docs/ADMIN-MODE.md](docs/ADMIN-MODE.md):** a complete guide to admin mode. It covers the stage, preview and apply model; every tab and action; renaming and what follows; the expression language with its type rules and feedback; the impact preview; applying and the version log; where changes live; what admin mode does not edit and where to do it instead; and three worked examples.
+
+4. **[docs/REFERENCE.md](docs/REFERENCE.md):** every id that ships by default, with the name people see and what it means. That covers 37 questions with their options, 15 derived values with their derivations, 17 named rules with the activities that use them, 7 presets with what they set, 112 activities by phase (owner, kind, durations, predecessors, inclusion condition, multipliers, description), phases, teams, categories and waste types. It is generated from the data files by `node tools/reference.js`, and a regression fails when the file and the data disagree.
+
+## Fixed during development
+
+5. The browser check caught a rename that was recorded after `renameActivity` had already rewritten the id, so the rename was noted as renaming a task to itself. The preview then blamed a pure rename for moving tasks. A regression now drives the admin overlay itself through a stub DOM: rename, preview, apply. It failed on that bug before the fix.
+
+## Validation
+
+Executed with Node v26:
+
+```text
+node test/run-tests.js       213 passed, 0 failed
+node test/expr-tests.js      13 expr tests passed, 0 failed
+node test/regressions.js     108 regression groups passed, 0 failed
+node tools/bundle.js         dist/flowline.html written (638 KB)
+```
+
+Browser-verified in Chrome:
+- A task, a question and a rule renamed in one session preview as "None of the 2 scenarios change shape". After Apply the included tasks are identical, the Tier 1 answer moved to `tier`, the per-task override moved to `solution-design`, the saved scenario was rewritten, and the rule is `R_needsDr`.
+- Taking an id that is already used is refused with the reason.
+- The predecessor picker adds by name, lists the 14 tasks matching "review", refuses a self-dependency, and names an unknown id.
+
+---
+
 # Flowline 1.6.2
 
 Prepared 29 September 2026 from 1.6.1.

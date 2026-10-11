@@ -1116,12 +1116,61 @@
       field("Optimal (" + unitName + ")", h("input", { name: "optimal", class: "input", type: "number", step: "any", min: "0", value: a.duration ? a.duration.optimal : 0 }))));
     form.appendChild(h("div", { class: "edit-row" }, field("Owner", sel("owner", teams, a.owner, true)), field("Phase", sel("phase", phases, a.phase, true))));
     form.appendChild(h("div", { class: "edit-row" }, field("Category", sel("category", cats, a.category)), field("Waste type", sel("waste", wastes, a.waste, true))));
-    form.appendChild(field("Predecessors (ids, ; separated)", h("input", { name: "predecessors", class: "input", value: (a.predecessors || []).join("; ") })));
+    form.appendChild(field("Predecessors", predecessorPicker(a)));
     form.appendChild(field("Notes", h("textarea", { name: "notes", class: "input", rows: 2 }, a.notes || "")));
     form.appendChild(h("div", { class: "edit-actions" },
       h("button", { type: "submit", class: "primary" }, "Save changes"),
       h("span", { class: "hint" }, "Saved in this browser. Changing totals scales the existing lead/cycle split proportionally. Export to keep a copy.")));
     return form;
+  }
+  /* Predecessors as named chips instead of a line of ids nobody can read.
+     The hidden "predecessors" field is what applyEdit reads, so the save path
+     is unchanged. Typing finds a task by id or name (VSM.admin.matchActivity);
+     a miss says why before anything is saved, and an id already in the data
+     that names no task is shown as such rather than silently kept. */
+  function predecessorPicker(a) {
+    const acts = data.process.activities || [];
+    const byId = new Map(acts.map(x => [x.id, x]));
+    let ids = (a.predecessors || []).slice();
+    const hidden = h("input", { type: "hidden", name: "predecessors" });
+    const chips = h("div", { class: "pred-chips" });
+    const msg = h("div", { class: "pred-msg", role: "status" });
+    const listId = "pred-options-" + Math.random().toString(36).slice(2, 8);
+    const options = h("datalist", { id: listId }, acts.filter(x => x.id !== a.id).map(x => h("option", { value: x.id + " — " + (x.name || x.id) })));
+    const input = h("input", { class: "input", type: "text", list: listId, placeholder: "Add: type a task name or id", "aria-label": "Add a predecessor" });
+    const say = (text, bad) => { msg.textContent = text || ""; msg.className = "pred-msg" + (bad ? " bad" : ""); };
+    function draw() {
+      hidden.value = ids.join("; ");
+      chips.innerHTML = "";
+      if (!ids.length) chips.appendChild(h("span", { class: "hint" }, "none - starts at zero"));
+      ids.forEach(pid => {
+        const t = byId.get(pid);
+        chips.appendChild(h("span", { class: "pred-chip" + (t ? "" : " missing"), title: t ? pid : "No task has this id - remove it or fix the id" },
+          h("span", { class: "pred-name" }, t ? (t.name || pid) : "no such task"),
+          h("code", null, pid),
+          h("button", { type: "button", class: "pred-x", title: "Remove", "aria-label": "Remove " + pid, onclick: () => { ids = ids.filter(x => x !== pid); draw(); say(""); } }, "\u00d7")));
+      });
+    }
+    function add() {
+      const text = input.value;
+      if (!text.trim()) return;
+      const r = VSM.admin.matchActivity(acts, text, a.id);
+      if (!r.id) {
+        const also = r.candidates ? " " + r.candidates.map(c => c + " (" + ((byId.get(c) || {}).name || c) + ")").join(", ") : "";
+        say(r.error + also, true);
+        return;
+      }
+      if (ids.includes(r.id)) { say("Already a predecessor.", true); input.value = ""; return; }
+      ids.push(r.id); input.value = ""; draw();
+      say("Added " + ((byId.get(r.id) || {}).name || r.id) + ".");
+    }
+    input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    /* choosing from the list fires change without Enter */
+    input.addEventListener("change", () => { if (/\s[—–-]\s/.test(input.value)) add(); });
+    draw();
+    if (ids.some(pid => !byId.has(pid))) say("Some predecessors name no task in this data. Remove them or the edit will not save.", true);
+    return h("div", { class: "pred-picker" }, hidden, chips, h("div", { class: "pred-add" }, input, options,
+      h("button", { type: "button", class: "ghost small", onclick: add }, "Add")), msg);
   }
   function applyEdit(id, form) {
     const f = form.elements;
@@ -1620,11 +1669,34 @@
       }] : [];
       VSM.adminUI.open(data, {
         runs: current.concat(VSM.runs.list()),
-        onApply: (candidate, changes) => {
+        onApply: (candidate, changes, renames) => {
           try { saveRulesOverride(candidate); }
           catch (e) { toast("Not applied: " + e.message, true); return false; }
           data.process = candidate.process;
           data.scenario = candidate.scenario;
+          /* Renamed ids carry what the person had set: answers and derived
+             overrides follow a renamed question, per-task overrides and the
+             selection follow a renamed activity, and the saved scenarios are
+             rewritten in the new vocabulary (the same mapping the impact
+             preview used), so nothing silently resets or goes stale. */
+          const rn = renames || {};
+          const moveKeys = (obj, map) => {
+            const out = {};
+            Object.keys(obj || {}).forEach(k => { out[Object.prototype.hasOwnProperty.call(map || {}, k) ? map[k] : k] = obj[k]; });
+            return out;
+          };
+          if (Object.keys(rn.variables || {}).length) {
+            state.scenario = moveKeys(state.scenario, rn.variables);
+            state.overrides = moveKeys(state.overrides, rn.variables);
+          }
+          if (Object.keys(rn.activities || {}).length) {
+            state.taskOverrides = moveKeys(state.taskOverrides, rn.activities);
+            if (selectedId && rn.activities[selectedId]) selectedId = rn.activities[selectedId];
+          }
+          if (Object.keys(rn.variables || {}).length || Object.keys(rn.activities || {}).length) {
+            try { VSM.runs.replaceAll(VSM.runs.list().map(r => VSM.admin.renameRun(r, rn))); }
+            catch (e) { toast("Saved scenarios not renamed: " + e.message, true); }
+          }
           /* a retired variable leaves the answers; an added one gets its default */
           state.scenario = mergeScenario(data.scenario.attributes, state.scenario);
           Object.keys(state.overrides).forEach(id => { if (!data.scenario.attributes.some(a => a.id === id)) delete state.overrides[id]; });
